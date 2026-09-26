@@ -1,0 +1,22 @@
+# webapp-mcp の systemd ユニットの例（/etc/systemd/system/webapp-mcp.service）
+# <配置先> は src/webapp-mcp/server を置いたディレクトリ、<実行ユーザ> は .env と data/ を読み書きできる専用ユーザ。
+
+[Unit]
+Description=webapp-mcp (MCP server for claude_webapp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=<実行ユーザ>
+WorkingDirectory=<配置先>
+ExecStart=<配置先>/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9001 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=5
+# .env・data/ を他のユーザから読めないようにする
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
