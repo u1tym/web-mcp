@@ -84,7 +84,12 @@ def register(server: MCPServer, runner: ToolRunner) -> None:
 
     @server.tool(
         name="expense_list_payment_methods",
-        description="支出方法（現金・カードなど）の一覧を、締め日・支払日のルールとともに返します。支出記録の登録・更新で指定する payment_method_id をここで確かめます。",
+        description=(
+            "支出方法（現金・カードなど）の一覧を、締め日・支払日のルールや売掛区分とともに返します。"
+            "支出記録の登録・更新で指定する payment_method_id をここで確かめます。"
+            "is_credit・is_credit_payment がともに false なら通常、is_credit が true なら売掛（後日精算する支出）、"
+            "is_credit_payment が true なら売掛支払（売掛の精算）です。"
+        ),
         annotations=READ,
     )
     async def expense_list_payment_methods(site: SiteArg = None) -> dict[str, Any]:
@@ -127,37 +132,45 @@ def register(server: MCPServer, runner: ToolRunner) -> None:
 
     @server.tool(
         name="expense_get_usage_date_report",
-        description="予算期間を指定して、予算項目ごとの予算と実績（利用日が期間内の支出の合計）と差額を返します。",
+        description=(
+            "予算期間を指定して、予算項目ごとの予算と実績（利用日が期間内の支出の合計）と差額を返します。"
+            "include_credit で、売掛（後日精算する支出）を実績に含めるかどうかを選べます。"
+            "売掛支払（売掛の精算）は include_credit の値に関わらず実績に含みません。"
+        ),
         annotations=READ,
     )
     async def expense_get_usage_date_report(
         budget_period_id: Annotated[int, id_field("予算期間の ID")],
+        include_credit: Annotated[bool, Field(description="true で売掛を実績に含める")] = False,
         site: SiteArg = None,
     ) -> dict[str, Any]:
         tool = "expense_get_usage_date_report"
-        target = runner.start(tool, site, budget_period_id=budget_period_id)
+        target = runner.start(tool, site, budget_period_id=budget_period_id, include_credit=include_credit)
         return await runner.call(
             tool,
             target,
             FEATURE,
             "GET",
             "/reports/usage-date",
-            params={"budget_period_id": budget_period_id},
+            params={"budget_period_id": budget_period_id, "include_credit": include_credit},
             messages=_PERIOD_NOT_FOUND,
         )
 
     @server.tool(
-        name="expense_get_payment_month_report",
-        description="年月を指定して、支払日がその月の支出を予算項目ごとに合計して返します（支払発生月基準）。",
+        name="expense_get_payment_date_report",
+        description=(
+            "年月を指定して、その年月に支払日を持つ支出を、支払日ごと・売掛区分（通常・売掛・売掛支払）ごとに合計して返します。"
+            "締め日が 0（即時支払）の支出方法によるものは対象外です。予算項目による内訳はありません。"
+        ),
         annotations=READ,
     )
-    async def expense_get_payment_month_report(
+    async def expense_get_payment_date_report(
         year_month: Annotated[str, Field(description="年月（YYYY-MM）", pattern=YEAR_MONTH_PATTERN)],
         site: SiteArg = None,
     ) -> dict[str, Any]:
-        tool = "expense_get_payment_month_report"
+        tool = "expense_get_payment_date_report"
         target = runner.start(tool, site, year_month=year_month)
-        return await runner.call(tool, target, FEATURE, "GET", "/reports/payment-month", params={"year_month": year_month})
+        return await runner.call(tool, target, FEATURE, "GET", "/reports/payment-date", params={"year_month": year_month})
 
     @server.tool(
         name="expense_create_expense",

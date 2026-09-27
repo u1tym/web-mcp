@@ -87,7 +87,7 @@ Web アプリの応答（`rules/13-webapp-api.md`）を、ツールのエラー�
 | `expense_list_payment_methods` | R | `GET /payment-methods`（expense-management） | REQ-010 |
 | `expense_list_expenses` | R | `GET /expenses`（expense-management） | REQ-010 |
 | `expense_get_usage_date_report` | R | `GET /reports/usage-date`（expense-management） | REQ-010 |
-| `expense_get_payment_month_report` | R | `GET /reports/payment-month`（expense-management） | REQ-010 |
+| `expense_get_payment_date_report` | R | `GET /reports/payment-date`（expense-management） | REQ-010 |
 | `expense_create_expense` | W | （支払日の省略時）`GET /payment-methods/{payment_method_id}/estimated-payment-date` → `POST /expenses`（expense-management） | REQ-011 |
 | `expense_update_expense` | W | （支払日の省略時）`GET /payment-methods/{payment_method_id}/estimated-payment-date` → `PATCH /expenses/{expense_id}`（expense-management） | REQ-011 |
 | `expense_delete_expense` | D | `DELETE /expenses/{expense_id}`（expense-management） | REQ-011 |
@@ -491,11 +491,11 @@ URL と API キーは含めない。
 
 #### `expense_list_payment_methods`
 
-- **説明**: 支出方法（現金・カードなど）の一覧を、締め日・支払日のルールとともに返します。支出記録の登録・更新で指定する `payment_method_id` をここで確かめます。
+- **説明**: 支出方法（現金・カードなど）の一覧を、締め日・支払日のルールや売掛区分とともに返します。支出記録の登録・更新で指定する `payment_method_id` をここで確かめます。`is_credit`・`is_credit_payment` がともに `false` なら通常、`is_credit` が `true` なら売掛（後日精算する支出）、`is_credit_payment` が `true` なら売掛支払（売掛の精算）です。
 - **注釈**: R
 - **呼び出す API**: `GET /payment-methods`
 - **入力**: なし
-- **出力**: Web アプリの応答（`{ "items": [ { "id", "name", "closing_day", "closing_day_shift_direction", "closing_day_exclusions", "payment_month_offset", "payment_day", "payment_day_shift_direction", "payment_day_exclusions", "display_order" } ] }`）
+- **出力**: Web アプリの応答（`{ "items": [ { "id", "name", "closing_day", "closing_day_shift_direction", "closing_day_exclusions", "payment_month_offset", "payment_day", "payment_day_shift_direction", "payment_day_exclusions", "display_order", "is_credit", "is_credit_payment" } ] }`）
 - **エラー**: 共通エラーのみ
 
 #### `expense_list_expenses`
@@ -517,10 +517,16 @@ URL と API キーは含めない。
 
 #### `expense_get_usage_date_report`
 
-- **説明**: 予算期間を指定して、予算項目ごとの予算と実績（利用日が期間内の支出の合計）と差額を返します。
+- **説明**: 予算期間を指定して、予算項目ごとの予算と実績（利用日が期間内の支出の合計）と差額を返します。`include_credit` で、売掛（後日精算する支出）を実績に含めるかどうかを選べます。売掛支払（売掛の精算）は、`include_credit` の値に関わらず実績に含みません。
 - **注釈**: R
-- **呼び出す API**: `GET /reports/usage-date?budget_period_id=`
-- **入力**: `budget_period_id`（integer、必須）
+- **呼び出す API**: `GET /reports/usage-date?budget_period_id=&include_credit=`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `budget_period_id` | integer | 必須 | 予算期間 |
+| `include_credit` | boolean | 任意（既定 `false`） | `true` で売掛を実績に含める |
+
 - **出力**: Web アプリの応答（`{ "budget_period": { "id", "title", "start_date", "end_date" }, "items": [ { "budget_item_id", "name", "budget_amount", "actual_amount", "difference" } ] }`）
 - **エラー**: 共通エラーのほか
 
@@ -528,13 +534,13 @@ URL と API キーは含めない。
 |------|------------------|
 | 404 | 指定した予算期間が見つかりません。 |
 
-#### `expense_get_payment_month_report`
+#### `expense_get_payment_date_report`
 
-- **説明**: 年月を指定して、支払日がその月の支出を予算項目ごとに合計して返します（支払発生月基準）。
+- **説明**: 年月を指定して、その年月に支払日を持つ支出を、支払日ごと・売掛区分（通常・売掛・売掛支払）ごとに合計して返します。締め日が 0（即時支払）の支出方法によるものは対象外です。予算項目による内訳はありません。
 - **注釈**: R
-- **呼び出す API**: `GET /reports/payment-month?year_month=`
+- **呼び出す API**: `GET /reports/payment-date?year_month=`
 - **入力**: `year_month`（string（年月）、必須）
-- **出力**: Web アプリの応答（`{ "items": [ { "budget_item_id", "name", "actual_amount" } ] }`）
+- **出力**: Web アプリの応答（`{ "items": [ { "payment_date", "normal_amount", "credit_amount", "credit_payment_amount" } ] }`。`normal_amount` は通常、`credit_amount` は売掛、`credit_payment_amount` は売掛支払の、その支払日における合計金額）
 - **エラー**: 共通エラーのみ
 
 #### `expense_create_expense`
@@ -613,7 +619,7 @@ URL と API キーは含めない。
 | REQ-007 | `goods_create_goods`、`goods_update_goods`、`goods_delete_goods` |
 | REQ-008 | `knowhow_list_major_categories`、`knowhow_list_middle_categories`、`knowhow_search_knowhows`、`knowhow_get_knowhow` |
 | REQ-009 | `knowhow_create_knowhow`、`knowhow_update_knowhow`、`knowhow_delete_knowhow` |
-| REQ-010 | `expense_list_budget_periods`、`expense_list_budget_items`、`expense_list_payment_methods`、`expense_list_expenses`、`expense_get_usage_date_report`、`expense_get_payment_month_report` |
+| REQ-010 | `expense_list_budget_periods`、`expense_list_budget_items`、`expense_list_payment_methods`、`expense_list_expenses`、`expense_get_usage_date_report`、`expense_get_payment_date_report` |
 | REQ-011 | `expense_create_expense`、`expense_update_expense`、`expense_delete_expense` |
 | REQ-012 | 共通エラー、削除のツールの説明（元に戻せない） |
 | REQ-013 | `design.md` の「ログ」 |
@@ -626,3 +632,5 @@ URL と API キーは含めない。
 |------|------|----------|
 | 2026-09-26 03:02 | 未承認 | 初版 |
 | 2026-09-26 03:07 | 承認済み | 初版を承認 |
+| 2026-09-27 | 未承認 | `expense_list_payment_methods` の出力に `is_credit`・`is_credit_payment` を追加。`expense_get_usage_date_report` に `include_credit` 引数を追加。`expense_get_payment_month_report` を `expense_get_payment_date_report`（`GET /reports/payment-date`、支払日ごと・売掛区分ごとの集計）に置き換え（REQ-010） |
+| 2026-09-27 | 承認済み | 上記の改訂を承認 |

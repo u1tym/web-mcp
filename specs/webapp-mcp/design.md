@@ -159,9 +159,9 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `knowhow_delete_knowhow` | ノウハウの削除 | REQ-009 |
 | `expense_list_expenses` | 支出記録の一覧 | REQ-010 |
 | `expense_list_budget_periods` | 予算期間の一覧 | REQ-010 |
-| `expense_get_usage_date_report` | 予算対実績（利用日基準） | REQ-010 |
-| `expense_get_payment_month_report` | 予算対実績（支払発生月基準） | REQ-010 |
-| `expense_list_payment_methods` | 支出方法の一覧 | REQ-010 |
+| `expense_get_usage_date_report` | 予算対実績（利用日基準。売掛を含めるかどうかを選べる） | REQ-010 |
+| `expense_get_payment_date_report` | 支払日毎の集計（支払日ごと・売掛区分ごとの合計） | REQ-010 |
+| `expense_list_payment_methods` | 支出方法の一覧（売掛区分を含む） | REQ-010 |
 | `expense_list_budget_items` | 予算期間ごとの予算項目の一覧 | REQ-010 |
 | `expense_create_expense` | 支出記録の登録（支払日の省略時は算出してから登録） | REQ-011 |
 | `expense_update_expense` | 支出記録の更新（支払日の省略時は算出してから更新） | REQ-011 |
@@ -269,3 +269,5 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 | 2026-09-26 02:53 | 承認済み | 初版を承認 |
 | 2026-09-26 02:56 | 未承認 | ツール `expense_list_budget_items` を追加（31 個）。支出記録の登録・更新で、支払日の省略時に算出 API を先に呼ぶ流れを追加 |
 | 2026-09-26 03:00 | 承認済み | expense_list_budget_items の追加と支払日の算出の流れを承認 |
+| 2026-09-27 | 未承認 | Web アプリの経費管理機能の改訂に合わせ、ツール一覧を更新。`expense_get_payment_month_report` を `expense_get_payment_date_report`（支払日毎・売掛区分ごとの集計）に置き換え、`expense_get_usage_date_report` と `expense_list_payment_methods` の概要に売掛区分の扱いを追記（REQ-010） |
+| 2026-09-27 | 承認済み | ツール一覧の更新を承認 |

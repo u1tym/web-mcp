@@ -68,7 +68,7 @@ EXPECTED = {
     "knowhow_list_major_categories": "R", "knowhow_list_middle_categories": "R", "knowhow_search_knowhows": "R",
     "knowhow_get_knowhow": "R", "knowhow_create_knowhow": "W", "knowhow_update_knowhow": "W", "knowhow_delete_knowhow": "D",
     "expense_list_budget_periods": "R", "expense_list_budget_items": "R", "expense_list_payment_methods": "R",
-    "expense_list_expenses": "R", "expense_get_usage_date_report": "R", "expense_get_payment_month_report": "R",
+    "expense_list_expenses": "R", "expense_get_usage_date_report": "R", "expense_get_payment_date_report": "R",
     "expense_create_expense": "W", "expense_update_expense": "W", "expense_delete_expense": "D",
 }
 HINTS = {"R": (True, False, True), "W": (False, False, False), "D": (False, True, True)}
@@ -140,8 +140,9 @@ READ_CASES = [
     ("expense_list_expenses", {"budget_period_id": 4}, f"{E}/expenses", {"budget_period_id": "4"}),
     ("expense_list_expenses", {"start_date": "2026-09-01", "end_date": "2026-09-30"}, f"{E}/expenses", {"start_date": "2026-09-01", "end_date": "2026-09-30"}),
     ("expense_list_expenses", {"unassigned": True}, f"{E}/expenses", {"unassigned": "true"}),
-    ("expense_get_usage_date_report", {"budget_period_id": 4}, f"{E}/reports/usage-date", {"budget_period_id": "4"}),
-    ("expense_get_payment_month_report", {"year_month": "2026-09"}, f"{E}/reports/payment-month", {"year_month": "2026-09"}),
+    ("expense_get_usage_date_report", {"budget_period_id": 4}, f"{E}/reports/usage-date", {"budget_period_id": "4", "include_credit": "false"}),
+    ("expense_get_usage_date_report", {"budget_period_id": 4, "include_credit": True}, f"{E}/reports/usage-date", {"budget_period_id": "4", "include_credit": "true"}),
+    ("expense_get_payment_date_report", {"year_month": "2026-09"}, f"{E}/reports/payment-date", {"year_month": "2026-09"}),
 ]
 
 
@@ -154,6 +155,14 @@ async def test_read_tools(mcp: MCPServer, tool: str, args: dict[str, Any], url: 
     assert out == payload
     assert dict(route.calls.last.request.url.params) == query
     assert route.calls.last.request.headers["authorization"] == f"Bearer {TEST_API_KEY}"
+
+
+async def test_expense_list_payment_methods_includes_credit_fields(mcp: MCPServer) -> None:
+    payload = {"items": [{"id": 1, "name": "売掛カード", "is_credit": True, "is_credit_payment": False}]}
+    ROUTER.get(f"{E}/payment-methods").mock(return_value=httpx.Response(200, json=payload))
+    error, out = await call(mcp, "expense_list_payment_methods")
+    assert not error
+    assert out == payload
 
 
 async def test_knowhow_search_repeats_keyword(mcp: MCPServer, log_dir: Path) -> None:

@@ -27,6 +27,7 @@
 | T-011 | 経費管理のツール（支払日の算出を含む） | REQ-010、REQ-011 / tool-design.md §経費管理 | `src/webapp-mcp/server/app/tools/expense.py`、`tests/unit/` | 3h | 下記 T-008〜T-011 |
 | T-012 | 結合テスト（OAuth のフロー → ツール → Web アプリ） | REQ-001〜REQ-013 / design.md §テスト | `src/webapp-mcp/tests/integration/` | 4h | 下記 T-012 |
 | T-013 | 配置の資料（nginx・systemd・手順書） | design.md §配置、rules/17-deploy.md | `src/webapp-mcp/server/nginx.example.conf`、`webapp-mcp.service.example`、`src/webapp-mcp/README.md` | 2h | 下記 T-013 |
+| T-014 | 経費管理ツールの改訂（売掛区分・支払日毎の集計への対応） | REQ-010 / design.md §ツール一覧、tool-design.md §経費管理 | `src/webapp-mcp/server/app/tools/expense.py`、`tests/unit/test_tools.py`、`tests/integration/test_end_to_end.py` | 2h | 下記 T-014 |
 
 ---
 
@@ -209,6 +210,28 @@ SDK の `OAuthAuthorizationServerProvider` を実装する。
 - [ ] README の手順だけで、別の環境に配置して接続できる内容になっている
 - [ ] 秘密の値の実例（本物のキー・トークン）を含まない
 
+## T-014: 経費管理ツールの改訂（売掛区分・支払日毎の集計への対応）
+
+**実装パス**: `server/app/tools/expense.py`、`tests/unit/test_tools.py`、`tests/integration/test_end_to_end.py`
+
+**内容**
+
+Web アプリの経費管理機能の改訂（`payment_methods` への `is_credit`・`is_credit_payment` の追加、`GET /reports/payment-month` の廃止と `GET /reports/payment-date` への置き換え）に、ツールを合わせる。
+
+- `expense_get_usage_date_report` に任意引数 `include_credit`（boolean、既定 `false`）を追加し、`GET /reports/usage-date` のクエリへそのまま渡す。
+- `expense_get_payment_month_report` を削除し、`expense_get_payment_date_report`（`GET /reports/payment-date?year_month=`）を追加する。ツール名の変更に伴い、ログに出す `tool` の値もこれに合わせる。
+- `expense_list_payment_methods` の説明文を、`tool-design.md` のとおり売掛区分に触れる内容に更新する（呼び出し・応答の組み立ては変更しない。Web アプリの応答をそのまま返すため `is_credit`・`is_credit_payment` は自動的に含まれる）。
+- 単体テスト（`test_tools.py`）を、`expense_get_payment_month_report` の呼び出し確認から `expense_get_payment_date_report`（`/reports/payment-date` を呼ぶこと、`year_month` を渡すこと、応答をそのまま返すこと）に置き換える。`expense_get_usage_date_report` のテストに、`include_credit` 省略時（クエリに `false` が渡ること）と指定時の確認を追加する。
+- 結合テスト（`test_end_to_end.py`）の `payment-month` 関連の呼び出しを `payment-date` に置き換える。
+
+**完了条件**
+
+- [ ] `expense_get_payment_date_report` が `GET /reports/payment-date` を呼び、`tool-design.md` どおりの出力を返す
+- [ ] `expense_get_payment_month_report` はツール一覧・実装・テストのいずれからも無くなっている
+- [ ] `expense_get_usage_date_report` が、`include_credit` 省略時は `false`、指定時はその値をクエリへ渡す
+- [ ] `expense_list_payment_methods` の応答に `is_credit`・`is_credit_payment` が含まれることを単体テストで確かめる
+- [ ] `server/venv` の pytest（単体）と、`WEBAPP_TEST_API_KEY` を設定した結合テストが全件成功する
+
 ## 承認
 
 現在の状態: 承認済み
@@ -217,3 +240,5 @@ SDK の `OAuthAuthorizationServerProvider` を実装する。
 |------|------|----------|
 | 2026-09-26 03:08 | 未承認 | 初版 |
 | 2026-09-26 03:08 | 承認済み | 初版を承認 |
+| 2026-09-27 | 未承認 | 経費管理ツールの改訂（T-014。売掛区分の追加、`expense_get_payment_month_report` を `expense_get_payment_date_report` に置き換え）を追加（REQ-010） |
+| 2026-09-27 | 承認済み | T-014 を承認 |
