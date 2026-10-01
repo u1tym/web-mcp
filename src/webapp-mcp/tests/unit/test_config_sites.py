@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.config import ConfigError, load_config
-from app.sites import SiteNotFoundError, load_sites
+from app.sites import FeatureNotConfiguredError, SiteNotFoundError, load_sites
 from conftest import OTHER_API_KEY, TEST_API_KEY, write_env
 
 
@@ -19,6 +19,10 @@ def test_loads_config_and_sites(tmp_path: Path) -> None:
     assert registry.resolve(None).api_key == TEST_API_KEY
     assert registry.resolve("office").api_key == OTHER_API_KEY
     assert registry.resolve("office").base_url("schedule") == "http://office.test/schedule"
+    # ROOM の接続先。office には room が無い
+    assert registry.resolve(None).base_url("room") == "http://webapp.test/room"
+    with pytest.raises(FeatureNotConfiguredError):
+        registry.resolve("office").base_url("room")
 
 
 def test_unknown_site(tmp_path: Path) -> None:
@@ -60,6 +64,8 @@ def test_missing_api_key_stops_startup(tmp_path: Path) -> None:
         ('default_site = "home"\n[sites.home]\nkind = "other"\n', "種別"),
         ('default_site = "Home"\n[sites.Home]\nkind = "claude_webapp"\n', "識別子"),
         ('default_site = "home"\n[sites.home]\nkind = "claude_webapp"\n[sites.home.api]\nnotes = "http://x"\n', "未知の機能"),
+        # room に似た名前は、未知の機能として拒否される
+        ('default_site = "home"\n[sites.home]\nkind = "claude_webapp"\n[sites.home.api]\nrooms = "http://x"\n', "未知の機能"),
     ],
 )
 def test_invalid_sites(tmp_path: Path, sites_toml: str, fragment: str) -> None:

@@ -70,6 +70,8 @@ EXPECTED = {
     "expense_list_budget_periods": "R", "expense_list_budget_items": "R", "expense_list_payment_methods": "R",
     "expense_list_expenses": "R", "expense_get_usage_date_report": "R", "expense_get_payment_date_report": "R",
     "expense_create_expense": "W", "expense_update_expense": "W", "expense_delete_expense": "D",
+    "room_get_state": "R", "room_set_device_state": "W", "room_run_scene": "W", "room_list_timers": "R",
+    "room_create_timer": "W", "room_update_timer": "W", "room_set_timer_enabled": "W", "room_delete_timer": "D",
 }
 HINTS = {"R": (True, False, True), "W": (False, False, False), "D": (False, True, True)}
 

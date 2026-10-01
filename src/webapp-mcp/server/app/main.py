@@ -19,7 +19,7 @@ from app.config import Config, ConfigError, load_config
 from app.logger import setup_logging, write
 from app.sites import SiteRegistry, load_sites
 from app.tools import ToolRunner
-from app.tools import common, expense, goods, knowhow, schedule
+from app.tools import common, expense, goods, knowhow, room, schedule
 from app.webapp_client import WebappClient
 
 INSTRUCTIONS = (
@@ -70,6 +70,7 @@ def build(cfg: Config, registry: SiteRegistry, transport: httpx.AsyncBaseTranspo
     goods.register(server, runner)
     knowhow.register(server, runner)
     expense.register(server, runner)
+    room.register(server, runner)
 
     signin = SigninPage(cfg, store, provider)
     server.custom_route("/signin", methods=["GET"], include_in_schema=False)(signin.get)

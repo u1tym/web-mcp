@@ -1,13 +1,17 @@
 """結合テスト: 起動した MCP サーバに OAuth で接続し、開発環境の Web アプリに対してツールを呼ぶ。
 
 前提:
-- 開発環境の Web アプリの 4 機能のバックエンドが起動していること
-  （既定: schedule=8002, goods-management=8006, knowhow-management=8005, expense-management=8177。
-   WEBAPP_TEST_<FEATURE>_URL で変更できる）
+- 開発環境の Web アプリの 5 機能のバックエンドが起動していること
+  （既定: schedule=8002, goods-management=8006, knowhow-management=8005, expense-management=8177, room=8011。
+   WEBAPP_TEST_<FEATURE>_URL で変更できる。ROOM のテスト（test_room_tools_against_webapp）は room だけでよい）
 - `api-key-management` の画面で発行した API キーを、環境変数 WEBAPP_TEST_API_KEY で渡すこと
-  （キーの持ち主に 4 機能が割り当てられていること）。無いときはこのテストをスキップする。
+  （キーの持ち主に 5 機能が割り当てられていること）。無いときはこのテストをスキップする。
 
 準備データ（カテゴリ・人物・アーティスト・媒体・支出方法）は、テストの中で Web アプリの API を直接呼んで作り、最後に削除する。
+
+ROOM のテストでは、機器を操作するツール（room_set_device_state、room_run_scene）を呼ばない。
+開発環境の ROOM は実機の SwitchBot を操作するため。実機への読み取り（room_get_state）と、
+定期実行の管理（無効で登録し、最後に削除する）だけを行う。
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ FEATURE_URLS = {
     "goods-management": os.environ.get("WEBAPP_TEST_GOODS_MANAGEMENT_URL", "http://127.0.0.1:8006"),
     "knowhow-management": os.environ.get("WEBAPP_TEST_KNOWHOW_MANAGEMENT_URL", "http://127.0.0.1:8005"),
     "expense-management": os.environ.get("WEBAPP_TEST_EXPENSE_MANAGEMENT_URL", "http://127.0.0.1:8177"),
+    "room": os.environ.get("WEBAPP_TEST_ROOM_URL", "http://127.0.0.1:8011"),
 }
 CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 
@@ -313,3 +318,78 @@ def test_oauth_then_tools_against_webapp(running: Running) -> None:
     assert "結合テストのグッズ" not in text and "本文（更新）" not in text
     assert "ツール呼び出し tool=expense_create_expense site=dev" in text
     json.dumps(tokens)  # 形式の確認（JSON であること）
+
+
+ROOM_DEVICES = {"ceiling_light", "indirect_light", "indoor_speaker", "bedside_speaker", "front_door"}
+
+
+def test_room_tools_against_webapp(running: Running) -> None:
+    """ROOM のツール: 状態の参照と、定期実行の管理。機器を操作するツールは呼ばない（実機が動くため）。"""
+    _, tokens = oauth_tokens(running.base)
+    created: list[int] = []
+    http = httpx.Client(base_url=FEATURE_URLS["room"], headers={"Authorization": f"Bearer {API_KEY}"}, timeout=10)
+
+    async def scenario(mcp: McpCaller) -> None:
+        # 状態の参照（実機への読み取りだけ）。取得できなかった機器があっても、5 機器が返る
+        state = await mcp.ok("room_get_state")
+        assert set(state["devices"]) == ROOM_DEVICES
+        assert state["fetched_at"].endswith("+09:00")
+        assert state["devices"]["ceiling_light"] == {"status": "ok", "state": "off", "implemented": False}
+        door = state["devices"]["front_door"]
+        assert "battery" in door and door["status"] in {"ok", "error"}
+
+        # 定期実行: 無効・深夜・お出かけ（万一、実行されても全機器を OFF にするだけ）で登録する
+        timer = await mcp.ok(
+            "room_create_timer", {"condition": "daily", "run_time": "03:07", "scene": "out", "is_enabled": False}
+        )
+        created.append(timer["id"])
+        assert timer["is_enabled"] is False and timer["last_run"] is None and timer["weekdays"] == []
+
+        listed = await mcp.ok("room_list_timers")
+        assert timer["id"] in [item["id"] for item in listed["schedules"]]
+
+        updated = await mcp.ok(
+            "room_update_timer",
+            {"schedule_id": timer["id"], "condition": "weekdays", "weekdays": [5, 1], "run_time": "03:08", "scene": "out"},
+        )
+        assert updated["weekdays"] == [1, 5] and updated["run_time"] == "03:08"
+        assert updated["is_enabled"] is False  # 省略した有効／無効は、現在の値のまま
+
+        enabled = await mcp.ok("room_set_timer_enabled", {"schedule_id": timer["id"], "is_enabled": True})
+        assert enabled["is_enabled"] is True
+        disabled = await mcp.ok("room_set_timer_enabled", {"schedule_id": timer["id"], "is_enabled": False})
+        assert disabled["is_enabled"] is False
+
+        assert await mcp.ok("room_delete_timer", {"schedule_id": timer["id"]}) == {"deleted": True, "id": timer["id"]}
+        created.remove(timer["id"])
+        listed = await mcp.ok("room_list_timers")
+        assert timer["id"] not in [item["id"] for item in listed["schedules"]]
+        for tool, args in (
+            ("room_delete_timer", {"schedule_id": timer["id"]}),
+            ("room_set_timer_enabled", {"schedule_id": timer["id"], "is_enabled": True}),
+        ):
+            assert "定期実行が見つかりません" in await mcp.error(tool, args)
+
+        # 入力の検査: 玄関ドアは操作できない（Web アプリを呼ぶ前に弾かれる）。曜日の指定で曜日が無いのは Web アプリが弾く
+        await mcp.error("room_set_device_state", {"device": "front_door", "state": "unlocked"})
+        text = await mcp.error("room_create_timer", {"condition": "weekdays", "run_time": "03:07", "scene": "out"})
+        assert "入力が不正です" in text
+
+        # ROOM の接続先が無いサイトでは、ROOM のツールだけが使えない
+        assert "サイト broken では、この機能を利用できません" in await mcp.error("room_get_state", {"site": "broken"})
+
+    try:
+        asyncio.run(with_session(running.base, tokens["access_token"], scenario))
+    finally:
+        for schedule_id in created:  # 途中で失敗しても、作った定期実行を残さない
+            http.delete(f"/schedules/{schedule_id}")
+        http.close()
+
+    text = log_text(running.log_dir)
+    assert API_KEY not in text and tokens["access_token"] not in text
+    assert "ツール呼び出し tool=room_get_state site=dev" in text
+    assert "ツール呼び出し tool=room_create_timer site=dev" in text
+    # 機器を操作するツールは、Web アプリへの呼び出しまで進んでいない
+    assert "tool=room_set_device_state site=dev" not in text
+    assert "tool=room_run_scene" not in text
+    assert "03:07" not in text and "03:08" not in text  # 定期実行の本文（時刻）は出さない

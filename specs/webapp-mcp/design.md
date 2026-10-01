@@ -4,15 +4,15 @@
 
 ## 全体構成
 
-本設計は `requirements.md` の REQ-001〜REQ-013 を満たす。
+本設計は `requirements.md` の REQ-001〜REQ-016 を満たす。
 
 ```
 MCP クライアント                         MCP サーバ（webapp-mcp）                        Web アプリ（サイトごと）
  Claude（Web/Desktop/モバイル）─┐        ┌───────────────────────────────┐           ┌ schedule
  Claude Code ───────────────────┼─https─▶│ nginx ─▶ uvicorn（127.0.0.1:9001）│─API キー─▶├ goods-management
  Microsoft 365 Copilot ─────────┘ OAuth   │  ├ OAuth 認可サーバ＋サインイン画面 │  Bearer   ├ knowhow-management
-                                  トークン │  ├ MCP（/mcp）＋ツール             │           └ expense-management
-                                          │  └ SQLite（認証の状態）            │
+                                  トークン │  ├ MCP（/mcp）＋ツール             │           ├ expense-management
+                                          │  └ SQLite（認証の状態）            │           └ room
                                           └───────────────────────────────┘
 ```
 
@@ -31,6 +31,7 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `goods-management` | `claude_webapp/specs/goods-management/api-design.md` |
 | `knowhow-management` | `claude_webapp/specs/knowhow-management/api-design.md` |
 | `expense-management` | `claude_webapp/specs/expense-management/api-design.md` |
+| `room` | `claude_webapp/specs/room/api-design.md` |
 
 各機能の API は「対象機能の API キー認証」（`claude_webapp/specs/api-key-management/api-design.md`）で呼ぶ。サイトの構成（`sites.toml`）と API キー（`.env`）の扱いは `rules/13-webapp-api.md`。
 
@@ -69,7 +70,7 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `WEBAPP_TIMEOUT_SECONDS` | `10` |
 | `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` | `1048576` / `5` |
 
-`server/sites.toml`（ひな型 `specs/templates/sites.example.toml`）: 既定のサイトと、サイトごとの識別子・表示名・種別・4 機能の API 基点 URL。MCP サーバと Web アプリを同じホストに置くときは、Web アプリの各バックエンドの `http://127.0.0.1:<port>` を書いてよい（通信がホストの外に出ないため）。別のホストのときは https の URL を書く。
+`server/sites.toml`（ひな型 `specs/templates/sites.example.toml`）: 既定のサイトと、サイトごとの識別子・表示名・種別・5 機能の API 基点 URL。MCP サーバと Web アプリを同じホストに置くときは、Web アプリの各バックエンドの `http://127.0.0.1:<port>` を書いてよい（通信がホストの外に出ないため）。別のホストのときは https の URL を書く。
 
 ### モジュール構成
 
@@ -85,6 +86,7 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `app/tools/goods.py` | グッズ管理のツール |
 | `app/tools/knowhow.py` | ノウハウ管理のツール |
 | `app/tools/expense.py` | 経費管理のツール |
+| `app/tools/room.py` | ROOM のツール |
 | `app/auth/store.py` | SQLite による認証の状態の保存（後述のテーブル）。トークンは SHA-256 のハッシュで保存・照合する |
 | `app/auth/provider.py` | SDK の `OAuthAuthorizationServerProvider` の実装。クライアント登録（リダイレクト URI の許可リストの照合）、認可（サインイン画面への誘導）、認可コード・アクセストークン・リフレッシュトークンの発行・照合・ローテーション・失効 |
 | `app/auth/passphrase.py` | パスフレーズの scrypt ハッシュの作成と、定数時間での照合 |
@@ -166,10 +168,24 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `expense_create_expense` | 支出記録の登録（支払日の省略時は算出してから登録） | REQ-011 |
 | `expense_update_expense` | 支出記録の更新（支払日の省略時は算出してから更新） | REQ-011 |
 | `expense_delete_expense` | 支出記録の削除 | REQ-011 |
+| `room_get_state` | ROOM の 5 機器の状態（ON/OFF、施錠中/開錠中、玄関ドアの電池残量）と取得日時 | REQ-014 |
+| `room_set_device_state` | ROOM の機器 1 つの ON/OFF の切り替え（間接照明・屋内スピーカー・枕元スピーカー・電灯。玄関ドアは受け付けない） | REQ-015 |
+| `room_run_scene` | ROOM の一括切替の実行（屋内スピーカー選択、枕元スピーカー選択、電灯選択、間接照明選択、お出かけ。玄関ドアは変えない） | REQ-015 |
+| `room_list_timers` | ROOM の定期実行（タイマー）の一覧 | REQ-016 |
+| `room_create_timer` | 定期実行の登録 | REQ-016 |
+| `room_update_timer` | 定期実行の更新 | REQ-016 |
+| `room_set_timer_enabled` | 定期実行の有効／無効の切り替え | REQ-016 |
+| `room_delete_timer` | 定期実行の削除 | REQ-016 |
 
 支出記録の登録・更新のツールは、支払日が省略されたとき、先に Web アプリの支払日の算出 API を呼び、その結果を支払日として登録・更新の API を呼ぶ（1 つのツールで 2 つの API を順に呼ぶ）。算出に失敗したときは登録・更新しない。
 
-注釈: 取得・一覧・検索のツールは `readOnlyHint=true`。削除のツールは `destructiveHint=true`。登録・更新・切り替えは `readOnlyHint=false`、`destructiveHint=false`。
+ROOM のツールの考え方:
+
+- 玄関ドアは、状態の参照（`room_get_state`）だけを提供する。施錠・開錠のツールは作らず、`room_set_device_state` の引数 `device` の選択肢にも玄関ドアを含めない（REQ-015）。一括切替と定期実行にも、玄関ドアを対象とするものは無い（Web アプリ側の定義による）。
+- 定期実行は、ROOM の用語が「定期実行」、Web アプリの API 上の名称が `schedules` である。スケジュール機能の予定（`schedule_*`）と、MCP クライアントの AI が取り違えないよう、ツール名には `timer` を使い、説明にも、スケジュール機能の予定とは別のものであることを書く。
+- 機器の操作（`room_set_device_state`、`room_run_scene`）は、実機が動く。ツールの説明に、そのことと、電灯が未実装であること、一括切替で一部の機器が失敗しうることを書く。
+
+注釈: 取得・一覧・検索のツールは `readOnlyHint=true`。削除のツールは `destructiveHint=true`。登録・更新・切り替え（ROOM の機器の操作・一括切替を含む）は `readOnlyHint=false`、`destructiveHint=false`。
 
 ## 認証
 
@@ -239,7 +255,7 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 ## テスト
 
 - 単体テスト（`tests/unit/`）: Web アプリの API を `respx` でモックし、各ツールの引数の検証・呼ぶ API・応答とエラーの変換を確かめる。`provider` と `store` の、登録（許可リスト）・認可コード・PKCE・リフレッシュのローテーション・失効・ロックを確かめる。
-- 結合テスト（`tests/integration/`）: 開発環境の Web アプリ（4 機能のバックエンド）と、`api-key-management` で発行した API キーを使い、OAuth のフロー（登録 → 認可 → サインイン → トークン）を経て MCP クライアント（SDK のクライアント）からツールを呼び出す。
+- 結合テスト（`tests/integration/`）: 開発環境の Web アプリ（5 機能のバックエンド）と、`api-key-management` で発行した API キーを使い、OAuth のフロー（登録 → 認可 → サインイン → トークン）を経て MCP クライアント（SDK のクライアント）からツールを呼び出す。
 
 ## 要件トレーサビリティ
 
@@ -252,6 +268,7 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 | REQ-006〜REQ-007 | `tools/goods.py` |
 | REQ-008〜REQ-009 | `tools/knowhow.py` |
 | REQ-010〜REQ-011 | `tools/expense.py` |
+| REQ-014〜REQ-016 | `tools/room.py` |
 | REQ-012 | `webapp_client.py` の状態コードの対応付け、再試行しない |
 | REQ-013 | `logger.py`、ログの表 |
 
@@ -271,3 +288,5 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 | 2026-09-26 03:00 | 承認済み | expense_list_budget_items の追加と支払日の算出の流れを承認 |
 | 2026-09-27 | 未承認 | Web アプリの経費管理機能の改訂に合わせ、ツール一覧を更新。`expense_get_payment_month_report` を `expense_get_payment_date_report`（支払日毎・売掛区分ごとの集計）に置き換え、`expense_get_usage_date_report` と `expense_list_payment_methods` の概要に売掛区分の扱いを追記（REQ-010） |
 | 2026-09-27 | 承認済み | ツール一覧の更新を承認 |
+| 2026-10-01 13:13 | 未承認 | ROOM の追加（REQ-014〜REQ-016）に合わせ、利用する機能に `room` を追加。モジュール `tools/room.py` と、ROOM のツール 8 個（合計 39 個）を追加。玄関ドアは参照のみとし、操作のツールを作らない方針を明記 |
+| 2026-10-01 13:13 | 承認済み | ROOM の追加（ツール 8 個、玄関ドアは参照のみ）を承認 |

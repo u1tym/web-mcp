@@ -91,6 +91,14 @@ Web アプリの応答（`rules/13-webapp-api.md`）を、ツールのエラー�
 | `expense_create_expense` | W | （支払日の省略時）`GET /payment-methods/{payment_method_id}/estimated-payment-date` → `POST /expenses`（expense-management） | REQ-011 |
 | `expense_update_expense` | W | （支払日の省略時）`GET /payment-methods/{payment_method_id}/estimated-payment-date` → `PATCH /expenses/{expense_id}`（expense-management） | REQ-011 |
 | `expense_delete_expense` | D | `DELETE /expenses/{expense_id}`（expense-management） | REQ-011 |
+| `room_get_state` | R | `GET /state`（room） | REQ-014 |
+| `room_set_device_state` | W | `PUT /devices/{device}/state`（room） | REQ-015 |
+| `room_run_scene` | W | `POST /scenes/{scene}`（room） | REQ-015 |
+| `room_list_timers` | R | `GET /schedules`（room） | REQ-016 |
+| `room_create_timer` | W | `POST /schedules`（room） | REQ-016 |
+| `room_update_timer` | W | `PUT /schedules/{schedule_id}`（room） | REQ-016 |
+| `room_set_timer_enabled` | W | `PUT /schedules/{schedule_id}/enabled`（room） | REQ-016 |
+| `room_delete_timer` | D | `DELETE /schedules/{schedule_id}`（room） | REQ-016 |
 
 ## ツール詳細
 
@@ -607,6 +615,248 @@ URL と API キーは含めない。
 - **出力**: `{ "deleted": true, "id": <expense_id> }`
 - **エラー**: 共通エラーのみ
 
+### ROOM（room）
+
+ROOM は、自室の機器（電灯、間接照明、屋内スピーカー、枕元スピーカー、玄関ドア）の状態を示し、操作する機能である。機器の実体は SwitchBot 製品で、Web アプリの ROOM が SwitchBot を呼ぶ。MCP サーバは SwitchBot を直接呼ばない。
+
+- **玄関ドアは参照のみ**。施錠・開錠のツールは無く、`room_set_device_state` の `device` の選択肢にも含めない（REQ-015）。一括切替・定期実行にも、玄関ドアを変えるものは無い。
+- 機器の値は、`device`（`ceiling_light`、`indirect_light`、`indoor_speaker`、`bedside_speaker`、`front_door`）と、`state`（`on`・`off`、玄関ドアは `locked`・`unlocked`）で表す。Web アプリと同じ。
+- 機器の操作のツール（`room_set_device_state`、`room_run_scene`）は、**実機が動く**。
+- 定期実行のツールは、名前に `timer` を使う。スケジュール機能の予定（`schedule_*`）とは別のもの。
+
+機器の状態（`device_state`）の形（Web アプリの応答のまま）:
+
+```json
+{ "status": "ok", "state": "on" }
+```
+
+- `status`: `ok`（取得できた）または `error`（取得できなかった）。`error` のとき `state` は `null`（状態を推測した値は返らない）。
+- 玄関ドアは、さらに `battery`（電池残量。0〜100 の整数。取得できなければ `null`）を持つ。
+- 電灯は、さらに `implemented`（常に `false`。未実装）を持つ。
+
+ROOM の 502（機器を操作できなかった）は、次のエラー文で返す。これは `room_set_device_state` に適用する。`room_run_scene` は、一部の機器が失敗しても 200 で返るため、結果の `results` で示す。
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 502 | サイト `<site>` の ROOM が機器を操作できませんでした（SwitchBot に接続できないか、機器がエラーを返しました）。実際の状態を `room_get_state` で確かめてください。 |
+
+#### `room_get_state`
+
+- **説明**: ROOM の 5 つの機器（電灯、間接照明、屋内スピーカー、枕元スピーカー、玄関ドア）の現在の状態と、状態を取得した日時を返します。機器の ON/OFF、玄関ドアの施錠中/開錠中と電池残量が分かります。実機に問い合わせるため、数秒かかることがあります。取得できなかった機器は `status` が `error` になり、他の機器の状態は返ります。電灯は未実装のため、常に OFF（`implemented` が `false`）です。機器を操作する前後の確認に使います。
+- **注釈**: R
+- **呼び出す API**: `GET /state`
+- **入力**: なし
+- **出力**: Web アプリの応答
+
+```json
+{
+  "fetched_at": "2026-10-01T10:15:30+09:00",
+  "devices": {
+    "ceiling_light": { "status": "ok", "state": "off", "implemented": false },
+    "indirect_light": { "status": "ok", "state": "on" },
+    "indoor_speaker": { "status": "error", "state": null },
+    "bedside_speaker": { "status": "ok", "state": "off" },
+    "front_door": { "status": "ok", "state": "locked", "battery": 35 }
+  }
+}
+```
+
+- **エラー**: 共通エラーのみ（機器ごとの取得の失敗は、エラーではなく、出力の `status` で示される）
+
+#### `room_set_device_state`
+
+- **説明**: ROOM の機器を 1 つ、ON または OFF にします。**実機が実際に動きます。** 対象は、電灯、間接照明、屋内スピーカー、枕元スピーカーです。**玄関ドアは操作できません**（状態の参照だけです）。現在の状態の反転ではなく、**目標の状態**（`on` か `off`）を指定してください。電灯は未実装のため、何も起きず、結果の `applied` が `false` になります。結果の `result` は、操作のあとに、その機器の状態を取得し直したものです（実機の反映が遅れて、目標と食い違うことがあります）。複数の機器を決まった組み合わせで切り替えるときは、`room_run_scene` を使います。
+- **注釈**: W
+- **呼び出す API**: `PUT /devices/{device}/state`（本文 `{ "state": "on" | "off" }`）
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `device` | `"ceiling_light"` \| `"indirect_light"` \| `"indoor_speaker"` \| `"bedside_speaker"` | 必須 | 操作する機器。玄関ドア（`front_door`）は選べない |
+| `state` | `"on"` \| `"off"` | 必須 | 目標の状態 |
+
+- **出力**: Web アプリの応答
+
+```json
+{
+  "device": "indirect_light",
+  "applied": true,
+  "fetched_at": "2026-10-01T10:15:33+09:00",
+  "result": { "status": "ok", "state": "on" }
+}
+```
+
+- `applied`: 機器へ指示を送ったか。電灯は `false`。
+- `result`: 操作のあとの、その機器の状態（`device_state`）。指示が成功しても、取得し直しに失敗したときは `status` が `error`。
+
+- **エラー**: 共通エラーと、上記の 502 のほか
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 404 | 機器が見つかりません。`device` は、電灯、間接照明、屋内スピーカー、枕元スピーカーのいずれかを指定してください。 |
+
+`device` と `state` は、入力スキーマの列挙で検査される（誤った値は SDK の入力検証のエラー）。
+
+#### `room_run_scene`
+
+- **説明**: ROOM の一括切替を実行します。**実機が実際に動きます。** `scene` は次の 5 種です。いずれも、玄関ドアは変えません。電灯は未実装のため、電灯への指示は行われず、結果が `skipped` になります。
+  - `indoor_speaker`（屋内スピーカー選択）: 屋内スピーカーを ON、枕元スピーカーを OFF
+  - `bedside_speaker`（枕元スピーカー選択）: 屋内スピーカーを OFF、枕元スピーカーを ON
+  - `ceiling_light`（電灯選択）: 電灯を ON、間接照明を OFF（電灯は未実装のため、間接照明の OFF だけが行われます）
+  - `indirect_light`（間接照明選択）: 電灯を OFF、間接照明を ON
+  - `out`（お出かけ）: 電灯・間接照明・屋内スピーカー・枕元スピーカーをすべて OFF
+
+  一部の機器が失敗しても、エラーにはならず、機器ごとの結果が返ります。成功した機器は元に戻りません。実行のあとの、全機器の状態も返ります。
+- **注釈**: W
+- **呼び出す API**: `POST /scenes/{scene}`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 必須 | 実行する一括切替 |
+
+- **出力**: Web アプリの応答
+
+```json
+{
+  "scene": "ceiling_light",
+  "outcome": "success",
+  "results": [
+    { "device": "ceiling_light", "target": "on", "outcome": "skipped" },
+    { "device": "indirect_light", "target": "off", "outcome": "success" }
+  ],
+  "fetched_at": "2026-10-01T10:15:36+09:00",
+  "devices": {
+    "ceiling_light": { "status": "ok", "state": "off", "implemented": false },
+    "indirect_light": { "status": "ok", "state": "off" },
+    "indoor_speaker": { "status": "ok", "state": "off" },
+    "bedside_speaker": { "status": "ok", "state": "off" },
+    "front_door": { "status": "ok", "state": "locked", "battery": 35 }
+  }
+}
+```
+
+- `results`: 機器ごとの結果。`outcome` は `success`、`failure`、`skipped`（電灯。未実装）。
+- `outcome`（全体）: 指示した機器（`skipped` を除く）がすべて成功なら `success`、すべて失敗なら `failure`、混在なら `partial`。
+- `devices`: 実行のあとに、全機器の状態を取得し直した結果。
+
+- **エラー**: 共通エラーのみ
+
+`scene` は、入力スキーマの列挙で検査される。
+
+#### `room_list_timers`
+
+- **説明**: ROOM の定期実行（タイマー）の一覧を返します。定期実行は、指定した日（毎日、曜日、祝日）と時刻に、一括切替を自動で行う仕組みです。実行条件、曜日、時刻、実行する一括切替、有効／無効、最終実行の結果が分かります。**スケジュール機能の予定・TODO（`schedule_*`）とは別のものです。** 更新・有効／無効の切り替え・削除で使う ID も、ここで確かめます。
+- **注釈**: R
+- **呼び出す API**: `GET /schedules`
+- **入力**: なし
+- **出力**: Web アプリの応答
+
+```json
+{
+  "schedules": [
+    {
+      "id": 1,
+      "condition": "weekdays",
+      "weekdays": [1, 3, 5],
+      "run_time": "07:00",
+      "scene": "indoor_speaker",
+      "is_enabled": true,
+      "last_run": {
+        "at": "2026-10-01T07:00:02+09:00",
+        "result": "partial",
+        "failed_devices": ["bedside_speaker"]
+      }
+    }
+  ]
+}
+```
+
+- `condition`: `daily`（毎日）、`weekdays`（曜日の指定）、`holiday`（祝日の指定）。
+- `weekdays`: `condition` が `weekdays` のときは 1 件以上。1 = 月曜、…、7 = 日曜。それ以外は空配列。
+- `last_run`: 未実行は `null`。`result` は `success`、`partial`、`failure`。
+- 並びは、時刻の昇順。
+
+- **エラー**: 共通エラーのみ
+
+#### `room_create_timer`
+
+- **説明**: ROOM の定期実行（タイマー）を 1 件登録します。実行条件、時刻、実行する一括切替を指定します。実行条件が `weekdays`（曜日の指定）のときは、曜日が必要です。実行する一括切替（`scene`）は `room_run_scene` と同じ 5 種で、玄関ドアを変えるものはありません。登録した定期実行は、既定で有効です。**スケジュール機能の予定の登録ではありません。**
+- **注釈**: W
+- **呼び出す API**: `POST /schedules`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `condition` | `"daily"` \| `"weekdays"` \| `"holiday"` | 必須 | 実行条件。毎日、曜日の指定、祝日の指定 |
+| `weekdays` | integer[]（1〜7） | 条件付き | `condition` が `weekdays` のとき必須。1 = 月曜、…、7 = 日曜。重複なし。それ以外のときは省略または空 |
+| `run_time` | string（時刻 `HH:MM`、日本標準時） | 必須 | 実行する時刻 |
+| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 必須 | 実行する一括切替 |
+| `is_enabled` | boolean | 任意 | 有効にするか。既定 `true` |
+
+- **出力**: 登録された 1 件（`room_list_timers` の `schedules` の要素と同じ形。`last_run` は `null`）
+- **エラー**: 共通エラーのみ（入力不正は 400 の共通エラー文で返る）
+
+#### `room_update_timer`
+
+- **説明**: 登録済みの ROOM の定期実行（タイマー）を更新します。実行条件・曜日・時刻・一括切替を、すべて送る必要があります（送らなかった曜日は空になります）。先に `room_list_timers` で現在の値を確かめ、変えない項目も現在の値のまま渡してください。有効／無効は、省略すると現在の値のままです。最終実行の結果は変わりません。
+- **注釈**: W
+- **呼び出す API**: `PUT /schedules/{schedule_id}`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `schedule_id` | integer | 必須 | 更新する定期実行 |
+| `condition` | `"daily"` \| `"weekdays"` \| `"holiday"` | 必須 | |
+| `weekdays` | integer[]（1〜7） | 条件付き | `condition` が `weekdays` のとき必須。それ以外のときは省略または空 |
+| `run_time` | string（時刻 `HH:MM`） | 必須 | |
+| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 必須 | |
+| `is_enabled` | boolean | 任意 | 省略すると、現在の値のまま |
+
+- **出力**: 更新後の 1 件
+- **エラー**: 共通エラーのほか
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 404 | 定期実行が見つかりません。ID を `room_list_timers` で確かめてください。 |
+
+#### `room_set_timer_enabled`
+
+- **説明**: ROOM の定期実行（タイマー）の有効／無効だけを切り替えます。無効にした定期実行は、自動で実行されません。他の項目と、最終実行の結果は変わりません。
+- **注釈**: W
+- **呼び出す API**: `PUT /schedules/{schedule_id}/enabled`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `schedule_id` | integer | 必須 | 対象の定期実行 |
+| `is_enabled` | boolean | 必須 | `true` で有効、`false` で無効 |
+
+- **出力**: 更新後の 1 件
+- **エラー**: 共通エラーのほか
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 404 | 定期実行が見つかりません。ID を `room_list_timers` で確かめてください。 |
+
+#### `room_delete_timer`
+
+- **説明**: ROOM の定期実行（タイマー）を削除します。**この操作は元に戻せません**（MCP サーバからは復元できません）。一時的に止めたいだけのときは、`room_set_timer_enabled` で無効にしてください。
+- **注釈**: D
+- **呼び出す API**: `DELETE /schedules/{schedule_id}`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `schedule_id` | integer | 必須 | 削除する定期実行 |
+
+- **出力**: `{ "deleted": true, "id": <schedule_id> }`
+- **エラー**: 共通エラーのほか
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 404 | 定期実行が見つかりません。ID を `room_list_timers` で確かめてください。 |
+
 ## 要件トレーサビリティ
 
 | 要件 | ツール・節 |
@@ -621,8 +871,11 @@ URL と API キーは含めない。
 | REQ-009 | `knowhow_create_knowhow`、`knowhow_update_knowhow`、`knowhow_delete_knowhow` |
 | REQ-010 | `expense_list_budget_periods`、`expense_list_budget_items`、`expense_list_payment_methods`、`expense_list_expenses`、`expense_get_usage_date_report`、`expense_get_payment_date_report` |
 | REQ-011 | `expense_create_expense`、`expense_update_expense`、`expense_delete_expense` |
-| REQ-012 | 共通エラー、削除のツールの説明（元に戻せない） |
+| REQ-012 | 共通エラー、削除のツールの説明（元に戻せない）、ROOM の 502 のエラー文 |
 | REQ-013 | `design.md` の「ログ」 |
+| REQ-014 | `room_get_state` |
+| REQ-015 | `room_set_device_state`、`room_run_scene`（玄関ドアのツールは無い） |
+| REQ-016 | `room_list_timers`、`room_create_timer`、`room_update_timer`、`room_set_timer_enabled`、`room_delete_timer` |
 
 ## 承認
 
@@ -634,3 +887,5 @@ URL と API キーは含めない。
 | 2026-09-26 03:07 | 承認済み | 初版を承認 |
 | 2026-09-27 | 未承認 | `expense_list_payment_methods` の出力に `is_credit`・`is_credit_payment` を追加。`expense_get_usage_date_report` に `include_credit` 引数を追加。`expense_get_payment_month_report` を `expense_get_payment_date_report`（`GET /reports/payment-date`、支払日ごと・売掛区分ごとの集計）に置き換え（REQ-010） |
 | 2026-09-27 | 承認済み | 上記の改訂を承認 |
+| 2026-10-01 13:15 | 未承認 | ROOM のツール 8 個（room_get_state、room_set_device_state、room_run_scene、room_list_timers、room_create_timer、room_update_timer、room_set_timer_enabled、room_delete_timer）を追加。玄関ドアのツールは作らない |
+| 2026-10-01 13:17 | 承認済み | ROOM のツール 8 個の追加を承認 |

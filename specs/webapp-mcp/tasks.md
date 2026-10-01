@@ -8,7 +8,7 @@
 - ソース配置: `src/webapp-mcp/server`（MCP サーバ）、`src/webapp-mcp/tests`（`unit/`、`integration/`）
 - 起動: `uvicorn app.main:app --host 127.0.0.1 --port 9001`（作業ディレクトリ `src/webapp-mcp/server`、venv は `server/venv`）
 - SDK: `mcp` 2.x（`MCPServer`）。Web アプリの Python は import しない。Web アプリの DB に接続しない。
-- 結合テストは、開発環境の Web アプリ（4 機能のバックエンド）と、`api-key-management` の画面で発行した API キーを使う。API キーは環境変数 `WEBAPP_TEST_API_KEY` で渡し、無いときは結合テストをスキップする。
+- 結合テストは、開発環境の Web アプリ（5 機能のバックエンド）と、`api-key-management` の画面で発行した API キーを使う。API キーは環境変数 `WEBAPP_TEST_API_KEY` で渡し、無いときは結合テストをスキップする。
 
 ## タスク一覧
 
@@ -28,6 +28,8 @@
 | T-012 | 結合テスト（OAuth のフロー → ツール → Web アプリ） | REQ-001〜REQ-013 / design.md §テスト | `src/webapp-mcp/tests/integration/` | 4h | 下記 T-012 |
 | T-013 | 配置の資料（nginx・systemd・手順書） | design.md §配置、rules/17-deploy.md | `src/webapp-mcp/server/nginx.example.conf`、`webapp-mcp.service.example`、`src/webapp-mcp/README.md` | 2h | 下記 T-013 |
 | T-014 | 経費管理ツールの改訂（売掛区分・支払日毎の集計への対応） | REQ-010 / design.md §ツール一覧、tool-design.md §経費管理 | `src/webapp-mcp/server/app/tools/expense.py`、`tests/unit/test_tools.py`、`tests/integration/test_end_to_end.py` | 2h | 下記 T-014 |
+| T-015 | ROOM のツールの追加（サイトの機能 `room`、ツール 8 個、単体テスト） | REQ-012〜REQ-016 / design.md §利用する Web アプリの機能・§モジュール構成・§ツール一覧、tool-design.md §ROOM | `src/webapp-mcp/server/app/sites.py`、`server/app/tools/room.py`、`server/app/main.py`、`tests/conftest.py`、`tests/unit/test_tools.py`、`tests/unit/test_config_sites.py` | 4h | 下記 T-015 |
+| T-016 | ROOM の結合テストと、手順書・設定の更新 | REQ-003、REQ-014〜REQ-016 / design.md §テスト・§配置 | `tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md`、`server/sites.toml`（運用の設定。リポジトリに含めない） | 3h | 下記 T-016 |
 
 ---
 
@@ -232,6 +234,57 @@ Web アプリの経費管理機能の改訂（`payment_methods` への `is_credi
 - [ ] `expense_list_payment_methods` の応答に `is_credit`・`is_credit_payment` が含まれることを単体テストで確かめる
 - [ ] `server/venv` の pytest（単体）と、`WEBAPP_TEST_API_KEY` を設定した結合テストが全件成功する
 
+## T-015: ROOM のツールの追加
+
+**実装パス**: `server/app/sites.py`、`server/app/tools/room.py`、`server/app/main.py`、`tests/conftest.py`、`tests/unit/test_tools.py`、`tests/unit/test_config_sites.py`
+
+**内容**
+
+- `sites.py`: サイトの機能名（`FEATURES`）に `room` を足す。`sites.toml` に `room` の接続先が無いサイトは、従来どおり起動でき、ROOM のツールだけが「このサイトでは、この機能を利用できません（接続先が設定されていません）」を返す。
+- `tools/room.py`: ツール 8 個（`room_get_state`、`room_set_device_state`、`room_run_scene`、`room_list_timers`、`room_create_timer`、`room_update_timer`、`room_set_timer_enabled`、`room_delete_timer`）を、`tool-design.md` のとおりに実装する。`main.py` で `room.register` を呼ぶ。
+  - 名前・説明・注釈（`READ`・`WRITE`・`DELETE`）・入力（型・必須・`pattern`・列挙）・出力・エラー文を、`tool-design.md` と一致させる。引数 `site` を持たせる。
+  - `room_set_device_state` の `device` は、`ceiling_light`・`indirect_light`・`indoor_speaker`・`bedside_speaker` の列挙とする。**`front_door` を含めない**。`state` は `on`・`off` の列挙。
+  - `room_run_scene` の `scene`、`room_create_timer`・`room_update_timer` の `condition` と `scene` は、列挙とする。`weekdays` は 1〜7 の整数の配列。`run_time` は `HH:MM` の `pattern`。
+  - `room_set_device_state` の 502 は、`ErrorMessages(extra={502: …})` で、`tool-design.md` の ROOM のエラー文（サイトの識別子を含む）にする。他のツールの 502 は、共通の文のまま。
+  - 出力は、Web アプリの応答の項目名・値を変えない。削除は `{ "deleted": true, "id": … }`。
+  - ログ: ツール名・サイト・判断に使う引数（`device`・`state`・`scene`・`condition`・`schedule_id`）。定期実行の本文（曜日・時刻）は、識別子ではないので出さない。
+- 単体テスト: `respx` のモックで確かめる。実機は動かさない。
+- `tests/conftest.py` のテスト用 `sites.toml` に、`room` の接続先を足す。
+
+**完了条件**
+
+- [ ] `respx` のモックで、8 個のツールが呼ぶメソッド・パス・本文が、`tool-design.md` と、`claude_webapp/specs/room/api-design.md` に一致する（`PUT /devices/{device}/state` の本文は `{ "state": … }`、`POST /scenes/{scene}` は本文なし、`PUT /schedules/{id}` と `PUT /schedules/{id}/enabled` は本文あり）
+- [ ] 各ツールの成功時の出力と、個別のエラー文（`room_set_device_state` の 502 と 404、`room_update_timer`・`room_set_timer_enabled`・`room_delete_timer` の 404）が、`tool-design.md` と一致する
+- [ ] 注釈（`readOnlyHint`・`destructiveHint`・`idempotentHint`）が、`tool-design.md` と一致する（`room_delete_timer` だけが破壊的）
+- [ ] `room_set_device_state` の入力スキーマに `front_door` が無く、`front_door` を渡すと、Web アプリを呼ばずに入力検証のエラーになる。玄関ドアを操作するツールは、ツール一覧のどこにも無い
+- [ ] `room_run_scene` が、`results` に `failure` を含む 200 の応答を、エラーにせず、そのまま返す
+- [ ] `weekdays`（0 や 8、重複）・`run_time`（`7:00` など）・列挙の誤りが、Web アプリを呼ばずに、入力検証のエラーになる
+- [ ] `room` の接続先が無いサイトで、ROOM のツールが「接続先が設定されていません」を返し、他の機能のツールは動く
+- [ ] ログに、API キー全体、機器の識別子、定期実行の本文が出ていない
+- [ ] `server/venv` の pytest（単体）が、既存のテストを含めて、全件成功する
+
+## T-016: ROOM の結合テストと、手順書・設定の更新
+
+**実装パス**: `tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md`、`server/sites.toml`（運用の設定。リポジトリに含めない）
+
+**内容**
+
+- 結合テスト: 開発環境の Web アプリの ROOM（`room` のバックエンド）に対して、MCP クライアント（SDK のクライアント）からツールを呼ぶ。
+  - `room_get_state`: 5 機器が返ること。玄関ドアに `battery` があること（実機への**読み取りだけ**を行う）。
+  - 定期実行: `room_create_timer`（**無効**で、`condition` は `daily`、時刻は深夜）→ `room_list_timers` → `room_update_timer` → `room_set_timer_enabled` → `room_delete_timer` を 1 巡し、**失敗しても、作った定期実行を削除して終える**。
+  - **機器を操作するツール（`room_set_device_state`、`room_run_scene`）は、結合テストでは呼ばない**。開発環境の ROOM が実機の SwitchBot を操作するため。これらは、単体テスト（T-015）と、利用者による実機の確認で確かめる。
+- `README.md`: 「4 機能」の記述を 5 機能（`room` を含む）に直す。API キーの持ち主に、`room` の割当が必要なことを足す。ROOM のツールの説明（玄関ドアは参照のみ、機器の操作は実機が動く、定期実行のツール名が `timer` であること）を足す。結合テストの前提に、ROOM のバックエンドの起動と、`room` の割当を足す。
+- `server/sites.toml`: 運用の設定に、`room` の接続先を足す（開発では `http://127.0.0.1:8011`）。API キーは、既存のものを使う（持ち主に `room` が割り当てられていること）。
+
+**完了条件**
+
+- [ ] 結合テストで、`room_get_state` が 5 機器を返し、定期実行の登録・一覧・更新・有効／無効の切り替え・削除が行え、削除後は一覧から消える
+- [ ] 結合テストが、途中で失敗しても、作った定期実行を残さない
+- [ ] 結合テストが、機器を操作するツールを呼ばない（実機が動かない）
+- [ ] `WEBAPP_TEST_API_KEY` が無いときは、ROOM の結合テストもスキップされる
+- [ ] `README.md` が、5 機能と ROOM のツールの注意（玄関ドアは参照のみ、機器の操作は実機が動く）を示し、秘密の値の実例を含まない
+- [ ] `server/venv` の pytest（単体）と、`WEBAPP_TEST_API_KEY` を設定した結合テストが、全件成功する
+
 ## 承認
 
 現在の状態: 承認済み
@@ -242,3 +295,5 @@ Web アプリの経費管理機能の改訂（`payment_methods` への `is_credi
 | 2026-09-26 03:08 | 承認済み | 初版を承認 |
 | 2026-09-27 | 未承認 | 経費管理ツールの改訂（T-014。売掛区分の追加、`expense_get_payment_month_report` を `expense_get_payment_date_report` に置き換え）を追加（REQ-010） |
 | 2026-09-27 | 承認済み | T-014 を承認 |
+| 2026-10-01 13:18 | 未承認 | ROOM のツール追加（REQ-014〜REQ-016）のタスク T-015（サイトの機能・ツール 8 個・単体テスト）と T-016（結合テスト・手順書・設定）を追加。結合テストでは、実機が動く機器の操作のツールを呼ばない |
+| 2026-10-01 13:19 | 承認済み | ROOM のツール追加のタスク（T-015・T-016）を承認 |

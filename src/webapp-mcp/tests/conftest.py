@@ -30,6 +30,7 @@ schedule = "http://webapp.test/schedule"
 goods-management = "http://webapp.test/goods"
 knowhow-management = "http://webapp.test/knowhow"
 expense-management = "http://webapp.test/expense"
+room = "http://webapp.test/room"
 
 [sites.office]
 title = "事務所"
