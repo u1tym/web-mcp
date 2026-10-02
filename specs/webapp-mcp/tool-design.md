@@ -746,7 +746,7 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
 
 #### `room_list_timers`
 
-- **説明**: ROOM の定期実行（タイマー）の一覧を返します。定期実行は、指定した日（毎日、曜日、祝日）と時刻に、一括切替を自動で行う仕組みです。実行条件、曜日、時刻、実行する一括切替、有効／無効、最終実行の結果が分かります。**スケジュール機能の予定・TODO（`schedule_*`）とは別のものです。** 更新・有効／無効の切り替え・削除で使う ID も、ここで確かめます。
+- **説明**: ROOM の定期実行（タイマー）の一覧を返します。定期実行は、指定した日（毎日、または曜日の指定）と時刻に、実行内容（一括切替、または機器 1 つの個別切替）を自動で行う仕組みです。実行条件、曜日、祝日の扱い、実行日の取り方、時刻、実行内容（`scene`、または `device` と `state`）、有効／無効、最終実行の結果が分かります。**スケジュール機能の予定・TODO（`schedule_*`）とは別のものです。** 更新・有効／無効の切り替え・削除で使う ID も、ここで確かめます。
 - **注釈**: R
 - **呼び出す API**: `GET /schedules`
 - **入力**: なし
@@ -759,47 +759,71 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
       "id": 1,
       "condition": "weekdays",
       "weekdays": [1, 3, 5],
+      "holiday_mode": "none",
+      "day_shift": "same",
       "run_time": "07:00",
       "scene": "indoor_speaker",
+      "device": null,
+      "state": null,
       "is_enabled": true,
       "last_run": {
         "at": "2026-10-01T07:00:02+09:00",
         "result": "partial",
         "failed_devices": ["bedside_speaker"]
       }
+    },
+    {
+      "id": 2,
+      "condition": "weekdays",
+      "weekdays": [1, 2, 3, 4, 5],
+      "holiday_mode": "exclude",
+      "day_shift": "before",
+      "run_time": "22:30",
+      "scene": null,
+      "device": "indirect_light",
+      "state": "off",
+      "is_enabled": true,
+      "last_run": null
     }
   ]
 }
 ```
 
-- `condition`: `daily`（毎日）、`weekdays`（曜日の指定）、`holiday`（祝日の指定）。
+- `condition`: `daily`（毎日）、`weekdays`（曜日の指定）。祝日だけの条件は無い。
+- `holiday_mode`、`day_shift`: `condition` が `weekdays` のときに意味を持つ。`daily` のときは、常に `none`、`same`。値の意味は、`room_create_timer` の入力の説明のとおり。
+- 実行内容: 一括切替のときは `scene` が値を持ち、`device` と `state` は `null`。機器の個別切替のときは `device` と `state` が値を持ち、`scene` は `null`。
 - `weekdays`: `condition` が `weekdays` のときは 1 件以上。1 = 月曜、…、7 = 日曜。それ以外は空配列。
-- `last_run`: 未実行は `null`。`result` は `success`、`partial`、`failure`。
+- `last_run`: 未実行は `null`。`result` は `success`、`partial`、`failure`。機器の個別切替は、`success` か `failure` のみ（`failure` のとき、`failed_devices` は、その機器 1 つ）。
 - 並びは、時刻の昇順。
 
 - **エラー**: 共通エラーのみ
 
 #### `room_create_timer`
 
-- **説明**: ROOM の定期実行（タイマー）を 1 件登録します。実行条件、時刻、実行する一括切替を指定します。実行条件が `weekdays`（曜日の指定）のときは、曜日が必要です。実行する一括切替（`scene`）は `room_run_scene` と同じ 5 種で、玄関ドアを変えるものはありません。登録した定期実行は、既定で有効です。**スケジュール機能の予定の登録ではありません。**
+- **説明**: ROOM の定期実行（タイマー）を 1 件登録します。実行条件、時刻、実行内容を指定します。実行条件が `weekdays`（曜日の指定）のときは、曜日が必要で、祝日の扱い（`holiday_mode`）と実行日の取り方（`day_shift`）も指定できます（省略すると、それぞれ指定した曜日のみ、当日）。`holiday_mode`（祝日の扱い）は、`none`（指定した曜日のみ。既定）、`include`（指定した曜日に加えて祝日にも実行）、`exclude`（指定した曜日のうち祝日は実行しない）。`day_shift`（実行日の取り方）は、`same`（当日。既定）、`before`（の前の日）、`after`（の次の日）。曜日と祝日の扱いで決まる日を「基準日」とし、`before` は基準日の前日に、`after` は基準日の翌日に実行します。実行内容は、一括切替（`scene`。`room_run_scene` と同じ 5 種）か、機器 1 つの個別切替（`device` と `state`）の、**どちらか一方だけ**を指定します。玄関ドアは、どちらにも指定できません。登録した定期実行は、既定で有効です。**スケジュール機能の予定の登録ではありません。**
 - **注釈**: W
 - **呼び出す API**: `POST /schedules`
 - **入力**
 
 | 引数 | 型 | 必須 | 説明 |
 |------|----|------|------|
-| `condition` | `"daily"` \| `"weekdays"` \| `"holiday"` | 必須 | 実行条件。毎日、曜日の指定、祝日の指定 |
-| `weekdays` | integer[]（1〜7） | 条件付き | `condition` が `weekdays` のとき必須。1 = 月曜、…、7 = 日曜。重複なし。それ以外のときは省略または空 |
+| `condition` | `"daily"` \| `"weekdays"` | 必須 | 実行条件。毎日、曜日の指定 |
+| `weekdays` | integer[]（1〜7） | 条件付き | `condition` が `weekdays` のとき必須。1 = 月曜、…、7 = 日曜。重複なし。`daily` のときは省略または空 |
+| `holiday_mode` | `"none"` \| `"include"` \| `"exclude"` | 任意 | 祝日の扱い。`none` = 指定した曜日のみ（省略時）、`include` = 祝日も実行、`exclude` = 祝日は実行しない。`condition` が `daily` のときは、省略または `none` |
+| `day_shift` | `"same"` \| `"before"` \| `"after"` | 任意 | 実行日の取り方。`same` = 当日（省略時）、`before` = の前の日、`after` = の次の日。`condition` が `daily` のときは、省略または `same` |
 | `run_time` | string（時刻 `HH:MM`、日本標準時） | 必須 | 実行する時刻 |
-| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 必須 | 実行する一括切替 |
+| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 条件付き | 一括切替。実行内容が一括切替のとき必須。個別切替のときは省略 |
+| `device` | `"ceiling_light"` \| `"indirect_light"` \| `"indoor_speaker"` \| `"bedside_speaker"` | 条件付き | 個別切替の機器（電灯は未実装で、指示は何も行われず、成功として扱われる）。実行内容が個別切替のとき必須。玄関ドアは選べない。一括切替のときは省略 |
+| `state` | `"on"` \| `"off"` | 条件付き | 個別切替の状態。`device` を指定するとき必須。一括切替のときは省略 |
 | `is_enabled` | boolean | 任意 | 有効にするか。既定 `true` |
 
 - **出力**: 登録された 1 件（`room_list_timers` の `schedules` の要素と同じ形。`last_run` は `null`）
-- **エラー**: 共通エラーのみ（入力不正は 400 の共通エラー文で返る）
+- **エラー**: 共通エラーのみ（入力不正は 400 の共通エラー文で返る。`scene` と `device` の両方、どちらも無い、`device` だけ・`state` だけ、毎日なのに祝日の扱い・実行日の取り方がある、などは、Web アプリが 400 で拒否する）
+- **注意**: 引数は、`scene` と `device` + `state` の整合を、ツールの入力スキーマでは検査せず、Web アプリの検査に任せる（`design.md`）。`scene`・`device`・`state`・`holiday_mode`・`day_shift` の値の範囲（列挙）は、入力スキーマで検査される。
 
 #### `room_update_timer`
 
-- **説明**: 登録済みの ROOM の定期実行（タイマー）を更新します。実行条件・曜日・時刻・一括切替を、すべて送る必要があります（送らなかった曜日は空になります）。先に `room_list_timers` で現在の値を確かめ、変えない項目も現在の値のまま渡してください。有効／無効は、省略すると現在の値のままです。最終実行の結果は変わりません。
+- **説明**: 登録済みの ROOM の定期実行（タイマー）を更新します。実行条件・曜日・祝日の扱い・実行日の取り方・時刻・実行内容を、すべて送る必要があります（送らなかった曜日は空になり、**送らなかった祝日の扱いと実行日の取り方は、現在の値のままではなく、既定（`none`、`same`）に戻ります**）。先に `room_list_timers` で現在の値を確かめ、変えない項目も現在の値のまま渡してください。実行内容は、一括切替（`scene`）か、個別切替（`device` と `state`）かを、変えられます。有効／無効は、省略すると現在の値のままです。最終実行の結果は変わりません。
 - **注釈**: W
 - **呼び出す API**: `PUT /schedules/{schedule_id}`
 - **入力**
@@ -807,10 +831,14 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
 | 引数 | 型 | 必須 | 説明 |
 |------|----|------|------|
 | `schedule_id` | integer | 必須 | 更新する定期実行 |
-| `condition` | `"daily"` \| `"weekdays"` \| `"holiday"` | 必須 | |
+| `condition` | `"daily"` \| `"weekdays"` | 必須 | |
 | `weekdays` | integer[]（1〜7） | 条件付き | `condition` が `weekdays` のとき必須。それ以外のときは省略または空 |
+| `holiday_mode` | `"none"` \| `"include"` \| `"exclude"` | 任意 | 省略すると `none`（現在の値のままではない） |
+| `day_shift` | `"same"` \| `"before"` \| `"after"` | 任意 | 省略すると `same`（現在の値のままではない） |
 | `run_time` | string（時刻 `HH:MM`） | 必須 | |
-| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 必須 | |
+| `scene` | `"indoor_speaker"` \| `"bedside_speaker"` \| `"ceiling_light"` \| `"indirect_light"` \| `"out"` | 条件付き | 一括切替。実行内容が一括切替のとき必須 |
+| `device` | `"ceiling_light"` \| `"indirect_light"` \| `"indoor_speaker"` \| `"bedside_speaker"` | 条件付き | 個別切替の機器。実行内容が個別切替のとき必須。玄関ドアは選べない |
+| `state` | `"on"` \| `"off"` | 条件付き | 個別切替の状態。`device` を指定するとき必須 |
 | `is_enabled` | boolean | 任意 | 省略すると、現在の値のまま |
 
 - **出力**: 更新後の 1 件
@@ -889,3 +917,5 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
 | 2026-09-27 | 承認済み | 上記の改訂を承認 |
 | 2026-10-01 13:15 | 未承認 | ROOM のツール 8 個（room_get_state、room_set_device_state、room_run_scene、room_list_timers、room_create_timer、room_update_timer、room_set_timer_enabled、room_delete_timer）を追加。玄関ドアのツールは作らない |
 | 2026-10-01 13:17 | 承認済み | ROOM のツール 8 個の追加を承認 |
+| 2026-10-02 11:13 | 未承認 | REQ-016 の改訂に合わせ、`room_list_timers`・`room_create_timer`・`room_update_timer` に、祝日の扱い（`holiday_mode`）、実行日の取り方（`day_shift`）、機器の個別切替（`device`・`state`）を追加し、実行条件から `holiday` を廃止。個別切替の結果の扱い、更新で省略したときの既定への復帰を追記 |
+| 2026-10-02 11:14 | 承認済み | 定期実行のツールの改訂（個別切替、祝日の扱い、実行日の取り方）を承認 |

@@ -30,6 +30,7 @@
 | T-014 | 経費管理ツールの改訂（売掛区分・支払日毎の集計への対応） | REQ-010 / design.md §ツール一覧、tool-design.md §経費管理 | `src/webapp-mcp/server/app/tools/expense.py`、`tests/unit/test_tools.py`、`tests/integration/test_end_to_end.py` | 2h | 下記 T-014 |
 | T-015 | ROOM のツールの追加（サイトの機能 `room`、ツール 8 個、単体テスト） | REQ-012〜REQ-016 / design.md §利用する Web アプリの機能・§モジュール構成・§ツール一覧、tool-design.md §ROOM | `src/webapp-mcp/server/app/sites.py`、`server/app/tools/room.py`、`server/app/main.py`、`tests/conftest.py`、`tests/unit/test_tools.py`、`tests/unit/test_config_sites.py` | 4h | 下記 T-015 |
 | T-016 | ROOM の結合テストと、手順書・設定の更新 | REQ-003、REQ-014〜REQ-016 / design.md §テスト・§配置 | `tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md`、`server/sites.toml`（運用の設定。リポジトリに含めない） | 3h | 下記 T-016 |
+| T-017 | ROOM の定期実行のツールの改訂（個別切替・祝日の扱い・実行日の取り方）と、手順書の更新 | REQ-016 / design.md §ROOM のツールの考え方、tool-design.md §`room_list_timers`・`room_create_timer`・`room_update_timer` | `server/app/tools/room.py`、`tests/unit/test_room_tools.py`、`tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md` | 3h | 下記 T-017 |
 
 ---
 
@@ -285,6 +286,33 @@ Web アプリの経費管理機能の改訂（`payment_methods` への `is_credi
 - [ ] `README.md` が、5 機能と ROOM のツールの注意（玄関ドアは参照のみ、機器の操作は実機が動く）を示し、秘密の値の実例を含まない
 - [ ] `server/venv` の pytest（単体）と、`WEBAPP_TEST_API_KEY` を設定した結合テストが、全件成功する
 
+## T-017: ROOM の定期実行のツールの改訂
+
+**実装パス**: `server/app/tools/room.py`、`tests/unit/test_room_tools.py`、`tests/integration/test_end_to_end.py`、`README.md`
+
+**内容**
+
+- `tools/room.py`: 次の 3 つのツールを、`tool-design.md` の改訂のとおりに直す。
+  - `room_create_timer`・`room_update_timer`: 引数に `holiday_mode`（`none`・`include`・`exclude`）、`day_shift`（`same`・`before`・`after`）、`device`（`ceiling_light`・`indirect_light`・`indoor_speaker`・`bedside_speaker`。**`front_door` を含めない**）、`state`（`on`・`off`）を足す。`condition` から `holiday` を外す。`scene` は、必須でなくなる（個別切替では省略）。
+  - 送る本文は、渡された引数だけを、Web アプリの `POST` / `PUT /schedules` の項目名のまま送る（省略した項目は送らない。`scene` と `device` + `state` の整合は、検査せず、Web アプリに任せる）。
+  - `room_list_timers`: 出力は、Web アプリの応答のまま（`holiday_mode`・`day_shift`・`device`・`state` が含まれる）。
+  - 3 つのツールの説明を、`tool-design.md` のとおりにする（祝日の扱い、実行日の取り方、基準日の考え方、実行内容はどちらか一方、更新で省略すると既定に戻ること、玄関ドアは指定できないこと）。
+  - ログ: 判断に使う引数（`condition`・`holiday_mode`・`day_shift`・`device`・`state`・`scene`・`schedule_id`）。曜日・時刻は、これまでどおり出さない。
+- 単体テスト（`respx` のモック。実機は動かさない）と、結合テスト（開発環境の ROOM。**無効**の定期実行の登録・更新・削除だけで、機器は動かさない）を直す。
+- `README.md`: 定期実行のツールの説明に、個別切替・祝日の扱い・実行日の取り方を足し、`holiday` の記述を除く。
+
+**完了条件**
+
+- [ ] 3 つのツールの入力スキーマが、`tool-design.md` と一致する。`device` に `front_door` が無く、`condition` に `holiday` が無い。列挙の誤り（`holiday_mode`・`day_shift`・`device`・`state`・`condition`）が、Web アプリを呼ばずに、入力検証のエラーになる
+- [ ] `room_create_timer` が、`holiday_mode` と `day_shift` を指定したとき、その値のまま本文に載せて `POST /schedules` を呼ぶ。指定しないときは、本文に載せない
+- [ ] 個別切替（`device` + `state`、`scene` なし）の登録・更新で、`scene` を本文に載せない。一括切替では、`device`・`state` を載せない
+- [ ] `scene` と `device` の両方、`device` だけ、毎日なのに `holiday_mode` を指定した場合は、ツールは検査せず Web アプリを呼び、Web アプリの 400 を、共通エラー文として返す
+- [ ] `room_list_timers` が、`scene` が `null`・`device`・`state` が値を持つ個別切替の要素を、そのまま返す
+- [ ] `room_update_timer` の説明に、「省略した祝日の扱いと実行日の取り方は既定に戻る」と、基準日の考え方が書かれている
+- [ ] 結合テストで、個別切替・祝日の扱い・実行日の取り方を指定した定期実行の登録・一覧・更新・有効／無効の切り替え・削除が行え、途中で失敗しても、作った定期実行を残さない。機器は動かない
+- [ ] ログに、定期実行の曜日・時刻が出ていない
+- [ ] `server/venv` の pytest（単体）が、既存のテストを含めて、全件成功する。`WEBAPP_TEST_API_KEY` を設定した結合テストも、全件成功する
+
 ## 承認
 
 現在の状態: 承認済み
@@ -297,3 +325,5 @@ Web アプリの経費管理機能の改訂（`payment_methods` への `is_credi
 | 2026-09-27 | 承認済み | T-014 を承認 |
 | 2026-10-01 13:18 | 未承認 | ROOM のツール追加（REQ-014〜REQ-016）のタスク T-015（サイトの機能・ツール 8 個・単体テスト）と T-016（結合テスト・手順書・設定）を追加。結合テストでは、実機が動く機器の操作のツールを呼ばない |
 | 2026-10-01 13:19 | 承認済み | ROOM のツール追加のタスク（T-015・T-016）を承認 |
+| 2026-10-02 11:15 | 未承認 | ROOM の定期実行のツールの改訂のタスク T-017 を追加（REQ-016 の改訂への対応） |
+| 2026-10-02 11:15 | 承認済み | T-017 を承認 |

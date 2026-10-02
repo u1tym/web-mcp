@@ -83,11 +83,39 @@ TIMER = {
     "id": 3,
     "condition": "weekdays",
     "weekdays": [1, 3, 5],
+    "holiday_mode": "none",
+    "day_shift": "same",
     "run_time": "07:00",
     "scene": "indoor_speaker",
+    "device": None,
+    "state": None,
     "is_enabled": True,
     "last_run": None,
 }
+# 機器の個別切替の定期実行（scene は null）
+DEVICE_TIMER = {
+    "id": 4,
+    "condition": "weekdays",
+    "weekdays": [1, 2, 3, 4, 5],
+    "holiday_mode": "exclude",
+    "day_shift": "before",
+    "run_time": "22:30",
+    "scene": None,
+    "device": "indirect_light",
+    "state": "off",
+    "is_enabled": True,
+    "last_run": {"at": "2026-10-01T22:30:02+09:00", "result": "failure", "failed_devices": ["indirect_light"]},
+}
+
+
+def enum_of(prop: dict[str, Any]) -> list[str]:
+    """入力スキーマの列挙。省略できる引数は anyOf（列挙と null）になる。"""
+    if "enum" in prop:
+        return list(prop["enum"])
+    for option in prop.get("anyOf", []):
+        if "enum" in option:
+            return list(option["enum"])
+    raise AssertionError(f"列挙が無い: {prop}")
 
 
 # ---- ツール一覧・注釈・入力スキーマ ----
@@ -122,7 +150,7 @@ async def test_no_tool_can_operate_the_front_door(mcp: MCPServer) -> None:
     assert schema["properties"]["state"]["enum"] == ["on", "off"]  # locked / unlocked は無い
     # 一括切替・定期実行の選択肢にも、玄関ドアは無い
     for tool, prop in (("room_run_scene", "scene"), ("room_create_timer", "scene"), ("room_update_timer", "scene")):
-        assert set(tools[tool].input_schema["properties"][prop]["enum"]) == {
+        assert set(enum_of(tools[tool].input_schema["properties"][prop])) == {
             "indoor_speaker",
             "bedside_speaker",
             "ceiling_light",
@@ -134,10 +162,19 @@ async def test_no_tool_can_operate_the_front_door(mcp: MCPServer) -> None:
 async def test_input_schemas(mcp: MCPServer) -> None:
     tools = await list_tools(mcp)
     create = tools["room_create_timer"].input_schema
-    assert set(create["required"]) == {"condition", "run_time", "scene"}
-    assert create["properties"]["condition"]["enum"] == ["daily", "weekdays", "holiday"]
+    assert set(create["required"]) == {"condition", "run_time"}  # 実行内容は、どちらか一方（scene、または device + state）
+    assert create["properties"]["condition"]["enum"] == ["daily", "weekdays"]  # 祝日だけの条件は無い
     update = tools["room_update_timer"].input_schema
-    assert set(update["required"]) == {"schedule_id", "condition", "run_time", "scene"}
+    assert set(update["required"]) == {"schedule_id", "condition", "run_time"}
+    for schema in (create, update):
+        assert enum_of(schema["properties"]["holiday_mode"]) == ["none", "include", "exclude"]
+        assert enum_of(schema["properties"]["day_shift"]) == ["same", "before", "after"]
+        assert enum_of(schema["properties"]["state"]) == ["on", "off"]
+        devices = enum_of(schema["properties"]["device"])
+        assert set(devices) == {"ceiling_light", "indirect_light", "indoor_speaker", "bedside_speaker"}
+        assert "front_door" not in devices  # 玄関ドアは、実行内容に指定できない
+        for name in ("holiday_mode", "day_shift", "scene", "device", "state"):
+            assert name not in schema["required"], name
     assert "is_enabled" not in update["required"]  # 省略すると現在の値のまま
     assert set(tools["room_set_timer_enabled"].input_schema["required"]) == {"schedule_id", "is_enabled"}
     assert tools["room_delete_timer"].input_schema["required"] == ["schedule_id"]
@@ -156,6 +193,18 @@ async def test_descriptions_warn_about_real_devices_and_distinguish_timers(mcp: 
     assert "玄関ドアは変えません" in (tools["room_run_scene"].description or "")
     for name in ("room_list_timers", "room_create_timer", "room_update_timer", "room_set_timer_enabled", "room_delete_timer"):
         assert "schedule_*" in (tools[name].description or ""), name
+
+
+async def test_timer_descriptions_explain_modes_and_defaults(mcp: MCPServer) -> None:
+    tools = await list_tools(mcp)
+    for name in ("room_create_timer", "room_update_timer"):
+        text = tools[name].description or ""
+        assert "基準日" in text and "の前の日" in text and "の次の日" in text, name
+        assert "どちらか一方" in text and "玄関ドアは、どちらにも指定できません" in text, name
+    # 更新で省略すると、現在の値のままではなく既定に戻る（誤解しやすいので、説明に明記する）
+    update = tools["room_update_timer"].description or ""
+    assert "現在の値のままではなく、既定" in update
+    assert "holiday" not in tools["room_create_timer"].input_schema["properties"]["condition"]["enum"]
 
 
 # ---- 参照 ----
@@ -309,15 +358,14 @@ async def test_create_timer_weekdays(mcp: MCPServer) -> None:
     }
 
 
-@pytest.mark.parametrize("condition", ["daily", "holiday"])
-async def test_create_timer_without_weekdays_sends_empty_list(mcp: MCPServer, condition: str) -> None:
+async def test_create_timer_daily_sends_empty_weekdays(mcp: MCPServer) -> None:
     route = ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(201, json=TIMER))
     error, _ = await call(
-        mcp, "room_create_timer", {"condition": condition, "run_time": "22:30", "scene": "out", "is_enabled": False}
+        mcp, "room_create_timer", {"condition": "daily", "run_time": "22:30", "scene": "out", "is_enabled": False}
     )
     assert not error
     assert body_of(route) == {
-        "condition": condition,
+        "condition": "daily",
         "weekdays": [],
         "run_time": "22:30",
         "scene": "out",
@@ -340,6 +388,12 @@ async def test_create_timer_without_weekdays_sends_empty_list(mcp: MCPServer, co
         {"scene": "front_door"},
         {"scene": "unlock"},
         {"condition": "monthly"},
+        {"condition": "holiday"},  # 祝日だけの条件は無い
+        {"holiday_mode": "all"},
+        {"day_shift": "tomorrow"},
+        {"scene": None, "device": "front_door", "state": "on"},  # 玄関ドアは対象外
+        {"scene": None, "device": "indirect_light", "state": "toggle"},
+        {"scene": None, "device": "locked", "state": "on"},
     ],
 )
 async def test_create_timer_invalid_arguments_do_not_call_webapp(mcp: MCPServer, override: dict[str, Any]) -> None:
@@ -475,6 +529,118 @@ async def test_unknown_site(mcp: MCPServer) -> None:
     assert error and "サイト nowhere は登録されていません" in text
 
 
+@pytest.mark.parametrize("mode", ["none", "include", "exclude"])
+@pytest.mark.parametrize("shift", ["same", "before", "after"])
+async def test_create_timer_sends_holiday_mode_and_day_shift_as_given(mcp: MCPServer, mode: str, shift: str) -> None:
+    route = ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(201, json=TIMER))
+    error, _ = await call(
+        mcp,
+        "room_create_timer",
+        {"condition": "weekdays", "weekdays": [1], "run_time": "07:00", "scene": "out", "holiday_mode": mode, "day_shift": shift},
+    )
+    assert not error
+    body = body_of(route)
+    assert body["holiday_mode"] == mode and body["day_shift"] == shift
+
+
+async def test_create_timer_omits_holiday_mode_and_day_shift_when_not_given(mcp: MCPServer) -> None:
+    route = ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(201, json=TIMER))
+    await call(mcp, "room_create_timer", {"condition": "daily", "run_time": "07:00", "scene": "out"})
+    body = body_of(route)
+    assert "holiday_mode" not in body and "day_shift" not in body  # 省略時の既定は Web アプリが決める
+
+
+@pytest.mark.parametrize(("device", "state"), [("ceiling_light", "on"), ("indirect_light", "off"), ("indoor_speaker", "on"), ("bedside_speaker", "off")])
+async def test_create_timer_device_action_sends_device_and_state_without_scene(mcp: MCPServer, device: str, state: str) -> None:
+    route = ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(201, json=DEVICE_TIMER))
+    error, out = await call(
+        mcp, "room_create_timer", {"condition": "daily", "run_time": "06:30", "device": device, "state": state}
+    )
+    assert not error, out
+    assert out == DEVICE_TIMER
+    assert body_of(route) == {
+        "condition": "daily",
+        "weekdays": [],
+        "run_time": "06:30",
+        "device": device,
+        "state": state,
+        "is_enabled": True,
+    }  # scene は送らない
+
+
+async def test_scene_timer_does_not_send_device_or_state(mcp: MCPServer) -> None:
+    route = ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(201, json=TIMER))
+    await call(mcp, "room_create_timer", {"condition": "daily", "run_time": "06:30", "scene": "out"})
+    body = body_of(route)
+    assert "device" not in body and "state" not in body
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"scene": "out", "device": "indirect_light", "state": "on"},  # 両方
+        {"device": "indirect_light"},  # 状態が無い
+        {"state": "on"},  # 機器が無い
+        {},  # どちらも無い
+        {"condition": "daily", "scene": "out", "holiday_mode": "exclude"},  # 毎日なのに祝日の扱い
+    ],
+)
+async def test_create_timer_inconsistent_combinations_are_decided_by_webapp(mcp: MCPServer, extra: dict[str, Any]) -> None:
+    """scene と device + state の整合などは、MCP は検査せず、Web アプリを呼び、その 400 を共通エラー文で返す。"""
+    route = ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(400, json={"detail": "入力が不正です"}))
+    args = {"condition": "weekdays", "weekdays": [1], "run_time": "07:00", **extra}
+    error, text = await call(mcp, "room_create_timer", args)
+    assert error
+    assert "入力が不正です" in text
+    assert route.call_count == 1  # Web アプリを呼んだ（MCP は拒否していない）
+
+
+async def test_update_timer_sends_new_fields_and_switches_to_device(mcp: MCPServer) -> None:
+    route = ROUTER.put(f"{R}/schedules/4").mock(return_value=httpx.Response(200, json=DEVICE_TIMER))
+    error, out = await call(
+        mcp,
+        "room_update_timer",
+        {
+            "schedule_id": 4,
+            "condition": "weekdays",
+            "weekdays": [1, 2, 3, 4, 5],
+            "holiday_mode": "exclude",
+            "day_shift": "before",
+            "run_time": "22:30",
+            "device": "indirect_light",
+            "state": "off",
+        },
+    )
+    assert not error, out
+    assert out == DEVICE_TIMER
+    assert body_of(route) == {
+        "condition": "weekdays",
+        "weekdays": [1, 2, 3, 4, 5],
+        "holiday_mode": "exclude",
+        "day_shift": "before",
+        "run_time": "22:30",
+        "device": "indirect_light",
+        "state": "off",
+    }
+
+
+async def test_update_timer_omitting_modes_sends_nothing_so_webapp_resets_defaults(mcp: MCPServer) -> None:
+    route = ROUTER.put(f"{R}/schedules/3").mock(return_value=httpx.Response(200, json=TIMER))
+    await call(mcp, "room_update_timer", {"schedule_id": 3, "condition": "weekdays", "weekdays": [1], "run_time": "08:15", "scene": "out"})
+    body = body_of(route)
+    assert "holiday_mode" not in body and "day_shift" not in body  # 現在の値は送らない。Web アプリが既定に戻す
+
+
+async def test_list_timers_returns_device_timers_as_is(mcp: MCPServer) -> None:
+    payload = {"schedules": [TIMER, DEVICE_TIMER]}
+    ROUTER.get(f"{R}/schedules").mock(return_value=httpx.Response(200, json=payload))
+    error, out = await call(mcp, "room_list_timers")
+    assert not error, out
+    assert out == payload
+    assert out["schedules"][1]["scene"] is None and out["schedules"][1]["device"] == "indirect_light"
+    assert out["schedules"][1]["last_run"]["failed_devices"] == ["indirect_light"]
+
+
 # ---- ログ ----
 
 
@@ -484,11 +650,25 @@ async def test_logs_do_not_contain_secrets_or_timer_bodies(mcp: MCPServer, log_d
     ROUTER.post(f"{R}/schedules").mock(return_value=httpx.Response(201, json=TIMER))
     await call(mcp, "room_set_device_state", {"device": "indirect_light", "state": "on"})
     await call(mcp, "room_run_scene", {"scene": "out"})
-    await call(mcp, "room_create_timer", {"condition": "weekdays", "weekdays": [1, 3], "run_time": "06:45", "scene": "out"})
+    await call(
+        mcp,
+        "room_create_timer",
+        {
+            "condition": "weekdays",
+            "weekdays": [1, 3],
+            "run_time": "06:45",
+            "holiday_mode": "exclude",
+            "day_shift": "before",
+            "device": "indirect_light",
+            "state": "off",
+        },
+    )
 
     log = log_text(log_dir)
     assert "tool=room_set_device_state" in log and "device=indirect_light" in log and "state=on" in log
     assert "tool=room_run_scene" in log and "scene=out" in log
     assert "tool=room_create_timer" in log and "condition=weekdays" in log
+    assert "holiday_mode=exclude" in log and "day_shift=before" in log
+    assert "device=indirect_light" in log and "state=off" in log
     assert TEST_API_KEY not in log
     assert "06:45" not in log  # 定期実行の本文（時刻・曜日）は出さない

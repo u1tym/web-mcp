@@ -40,8 +40,53 @@ Scene = Annotated[
     ),
 ]
 Condition = Annotated[
-    Literal["daily", "weekdays", "holiday"],
-    Field(description="実行条件。daily（毎日）、weekdays（曜日の指定）、holiday（祝日の指定）"),
+    Literal["daily", "weekdays"],
+    Field(description="実行条件。daily（毎日）、weekdays（曜日の指定）。祝日だけの条件は無い"),
+]
+HolidayMode = Annotated[
+    Literal["none", "include", "exclude"],
+    Field(
+        description=(
+            "祝日の扱い（condition が weekdays のとき）。none（指定した曜日のみ。省略時）、"
+            "include（指定した曜日に加えて祝日にも実行）、exclude（指定した曜日のうち祝日は実行しない）。"
+            "daily のときは省略または none"
+        )
+    ),
+]
+DayShift = Annotated[
+    Literal["same", "before", "after"],
+    Field(
+        description=(
+            "実行日の取り方（condition が weekdays のとき）。曜日と祝日の扱いで決まる日を基準日とし、"
+            "same（当日。省略時）は基準日に、before（の前の日）は基準日の前日に、"
+            "after（の次の日）は基準日の翌日に実行する。daily のときは省略または same"
+        )
+    ),
+]
+# 一括切替か、個別切替（device + state）かは、どちらか一方だけを指定する。整合の検査は Web アプリに任せる
+TimerScene = Annotated[
+    Literal["indoor_speaker", "bedside_speaker", "ceiling_light", "indirect_light", "out"],
+    Field(
+        description=(
+            "実行内容が一括切替のとき必須（個別切替のときは省略）。indoor_speaker（屋内スピーカー選択）、"
+            "bedside_speaker（枕元スピーカー選択）、ceiling_light（電灯選択）、indirect_light（間接照明選択）、"
+            "out（お出かけ）"
+        )
+    ),
+]
+TimerDevice = Annotated[
+    Literal["ceiling_light", "indirect_light", "indoor_speaker", "bedside_speaker"],
+    Field(
+        description=(
+            "実行内容が機器 1 つの個別切替のとき必須（一括切替のときは省略）。ceiling_light（電灯。未実装で、"
+            "何も指示されず成功として扱われる）、indirect_light（間接照明）、indoor_speaker（屋内スピーカー）、"
+            "bedside_speaker（枕元スピーカー）。玄関ドアは選べません。state も必要"
+        )
+    ),
+]
+TimerState = Annotated[
+    Literal["on", "off"],
+    Field(description="個別切替の状態。device を指定するとき必須（一括切替のときは省略）。on（ON）または off（OFF）"),
 ]
 RunTime = Annotated[
     str,
@@ -61,12 +106,43 @@ Weekdays = Annotated[
     Field(
         description=(
             "曜日（1〜7。1 = 月曜、…、7 = 日曜。重複なし）。condition が weekdays のとき必須。"
-            "daily・holiday のときは省略または空"
+            "daily のときは省略または空"
         )
     ),
 ]
 
 _TIMER_NOTE = "スケジュール機能の予定・TODO（schedule_*）とは別のものです。"
+_TIMER_MODES = (
+    "祝日の扱い（holiday_mode）は、none（指定した曜日のみ。既定）、include（指定した曜日に加えて祝日にも実行）、"
+    "exclude（指定した曜日のうち祝日は実行しない）。実行日の取り方（day_shift）は、same（当日。既定）、"
+    "before（の前の日）、after（の次の日）。曜日と祝日の扱いで決まる日を「基準日」とし、"
+    "before は基準日の前日に、after は基準日の翌日に実行します。"
+)
+_TIMER_ACTION = (
+    "実行内容は、一括切替（scene。room_run_scene と同じ 5 種）か、機器 1 つの個別切替（device と state）の、"
+    "どちらか一方だけを指定します。玄関ドアは、どちらにも指定できません。"
+)
+
+
+def _timer_options(
+    holiday_mode: str | None,
+    day_shift: str | None,
+    scene: str | None,
+    device: str | None,
+    state: str | None,
+) -> dict[str, Any]:
+    """渡された項目だけを、Web アプリの本文の項目名のまま返す（省略したものは送らない）。
+
+    scene と device + state の整合などの検査は行わず、Web アプリの 400 に任せる。
+    """
+    options = {
+        "holiday_mode": holiday_mode,
+        "day_shift": day_shift,
+        "scene": scene,
+        "device": device,
+        "state": state,
+    }
+    return {key: value for key, value in options.items() if value is not None}
 _TIMER_NOT_FOUND = "定期実行が見つかりません。ID を room_list_timers で確かめてください。"
 
 
@@ -152,9 +228,10 @@ def register(server: MCPServer, runner: ToolRunner) -> None:
     @server.tool(
         name="room_list_timers",
         description=(
-            "ROOM の定期実行（タイマー）の一覧を返します。定期実行は、指定した日（毎日、曜日、祝日）と時刻に、"
-            "一括切替を自動で行う仕組みです。実行条件、曜日、時刻、実行する一括切替、有効／無効、"
-            "最終実行の結果が分かります。" + _TIMER_NOTE + "更新・有効／無効の切り替え・削除で使う ID も、ここで確かめます。"
+            "ROOM の定期実行（タイマー）の一覧を返します。定期実行は、指定した日（毎日、または曜日の指定）と時刻に、"
+            "実行内容（一括切替、または機器 1 つの個別切替）を自動で行う仕組みです。実行条件、曜日、祝日の扱い、"
+            "実行日の取り方、時刻、実行内容（scene、または device と state）、有効／無効、最終実行の結果が分かります。"
+            + _TIMER_NOTE + "更新・有効／無効の切り替え・削除で使う ID も、ここで確かめます。"
         ),
         annotations=READ,
     )
@@ -166,38 +243,45 @@ def register(server: MCPServer, runner: ToolRunner) -> None:
     @server.tool(
         name="room_create_timer",
         description=(
-            "ROOM の定期実行（タイマー）を 1 件登録します。実行条件、時刻、実行する一括切替を指定します。"
-            "実行条件が weekdays（曜日の指定）のときは、曜日が必要です。"
-            "実行する一括切替（scene）は room_run_scene と同じ 5 種で、玄関ドアを変えるものはありません。"
-            "登録した定期実行は、既定で有効です。" + _TIMER_NOTE
+            "ROOM の定期実行（タイマー）を 1 件登録します。実行条件、時刻、実行内容を指定します。"
+            "実行条件が weekdays（曜日の指定）のときは、曜日が必要で、祝日の扱いと実行日の取り方も指定できます"
+            "（省略すると、指定した曜日のみ、当日）。" + _TIMER_MODES + _TIMER_ACTION
+            + "登録した定期実行は、既定で有効です。" + _TIMER_NOTE
         ),
         annotations=WRITE,
     )
     async def room_create_timer(
         condition: Condition,
         run_time: RunTime,
-        scene: Scene,
         weekdays: Weekdays | None = None,
+        holiday_mode: HolidayMode | None = None,
+        day_shift: DayShift | None = None,
+        scene: TimerScene | None = None,
+        device: TimerDevice | None = None,
+        state: TimerState | None = None,
         is_enabled: Annotated[bool, Field(description="有効にするか。既定 true")] = True,
         site: SiteArg = None,
     ) -> dict[str, Any]:
         tool = "room_create_timer"
-        target = runner.start(tool, site, condition=condition, scene=scene, is_enabled=is_enabled)
-        body = {
+        options = _timer_options(holiday_mode, day_shift, scene, device, state)
+        target = runner.start(tool, site, condition=condition, is_enabled=is_enabled, **options)
+        body: dict[str, Any] = {
             "condition": condition,
             "weekdays": weekdays or [],
             "run_time": run_time,
-            "scene": scene,
             "is_enabled": is_enabled,
+            **options,
         }
         return await runner.call(tool, target, FEATURE, "POST", "/schedules", json=body)
 
     @server.tool(
         name="room_update_timer",
         description=(
-            "登録済みの ROOM の定期実行（タイマー）を更新します。実行条件・曜日・時刻・一括切替を、すべて送る必要があります"
-            "（送らなかった曜日は空になります）。先に room_list_timers で現在の値を確かめ、"
-            "変えない項目も現在の値のまま渡してください。有効／無効は、省略すると現在の値のままです。"
+            "登録済みの ROOM の定期実行（タイマー）を更新します。実行条件・曜日・祝日の扱い・実行日の取り方・時刻・実行内容を、"
+            "すべて送る必要があります（送らなかった曜日は空になり、送らなかった祝日の扱いと実行日の取り方は、"
+            "現在の値のままではなく、既定（none、same）に戻ります）。先に room_list_timers で現在の値を確かめ、"
+            "変えない項目も現在の値のまま渡してください。" + _TIMER_MODES + _TIMER_ACTION
+            + "一括切替と個別切替の間で、変えられます。有効／無効は、省略すると現在の値のままです。"
             "最終実行の結果は変わりません。" + _TIMER_NOTE
         ),
         annotations=WRITE,
@@ -206,18 +290,23 @@ def register(server: MCPServer, runner: ToolRunner) -> None:
         schedule_id: Annotated[int, id_field("更新する定期実行の ID")],
         condition: Condition,
         run_time: RunTime,
-        scene: Scene,
         weekdays: Weekdays | None = None,
+        holiday_mode: HolidayMode | None = None,
+        day_shift: DayShift | None = None,
+        scene: TimerScene | None = None,
+        device: TimerDevice | None = None,
+        state: TimerState | None = None,
         is_enabled: Annotated[bool | None, Field(description="有効／無効。省略すると現在の値のまま")] = None,
         site: SiteArg = None,
     ) -> dict[str, Any]:
         tool = "room_update_timer"
-        target = runner.start(tool, site, schedule_id=schedule_id, condition=condition, scene=scene)
+        options = _timer_options(holiday_mode, day_shift, scene, device, state)
+        target = runner.start(tool, site, schedule_id=schedule_id, condition=condition, **options)
         body: dict[str, Any] = {
             "condition": condition,
             "weekdays": weekdays or [],
             "run_time": run_time,
-            "scene": scene,
+            **options,
         }
         if is_enabled is not None:
             body["is_enabled"] = is_enabled

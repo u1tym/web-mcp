@@ -344,6 +344,8 @@ def test_room_tools_against_webapp(running: Running) -> None:
         )
         created.append(timer["id"])
         assert timer["is_enabled"] is False and timer["last_run"] is None and timer["weekdays"] == []
+        assert (timer["holiday_mode"], timer["day_shift"]) == ("none", "same")  # 省略時の既定
+        assert (timer["scene"], timer["device"], timer["state"]) == ("out", None, None)
 
         listed = await mcp.ok("room_list_timers")
         assert timer["id"] in [item["id"] for item in listed["schedules"]]
@@ -354,6 +356,44 @@ def test_room_tools_against_webapp(running: Running) -> None:
         )
         assert updated["weekdays"] == [1, 5] and updated["run_time"] == "03:08"
         assert updated["is_enabled"] is False  # 省略した有効／無効は、現在の値のまま
+        assert (updated["holiday_mode"], updated["day_shift"]) == ("none", "same")
+
+        # 機器の個別切替・祝日の扱い・実行日の取り方（無効・深夜で登録するので、機器は動かない）
+        device_timer = await mcp.ok(
+            "room_create_timer",
+            {
+                "condition": "weekdays",
+                "weekdays": [1, 2, 3, 4, 5],
+                "holiday_mode": "exclude",
+                "day_shift": "before",
+                "run_time": "03:09",
+                "device": "indirect_light",
+                "state": "off",
+                "is_enabled": False,
+            },
+        )
+        created.append(device_timer["id"])
+        assert device_timer["is_enabled"] is False and device_timer["last_run"] is None
+        assert (device_timer["scene"], device_timer["device"], device_timer["state"]) == (None, "indirect_light", "off")
+        assert (device_timer["holiday_mode"], device_timer["day_shift"]) == ("exclude", "before")
+        assert device_timer["weekdays"] == [1, 2, 3, 4, 5]
+        listed = await mcp.ok("room_list_timers")
+        item = next(i for i in listed["schedules"] if i["id"] == device_timer["id"])
+        assert (item["device"], item["state"], item["scene"]) == ("indirect_light", "off", None)
+
+        # 更新: 祝日の扱いと実行日の取り方を省略すると、既定に戻る。個別切替から一括切替へも変えられる
+        changed = await mcp.ok(
+            "room_update_timer",
+            {"schedule_id": device_timer["id"], "condition": "weekdays", "weekdays": [6, 7], "run_time": "03:10", "scene": "out"},
+        )
+        assert (changed["holiday_mode"], changed["day_shift"]) == ("none", "same")
+        assert (changed["scene"], changed["device"], changed["state"]) == ("out", None, None)
+        assert changed["is_enabled"] is False
+        assert await mcp.ok("room_delete_timer", {"schedule_id": device_timer["id"]}) == {
+            "deleted": True,
+            "id": device_timer["id"],
+        }
+        created.remove(device_timer["id"])
 
         enabled = await mcp.ok("room_set_timer_enabled", {"schedule_id": timer["id"], "is_enabled": True})
         assert enabled["is_enabled"] is True
@@ -372,6 +412,15 @@ def test_room_tools_against_webapp(running: Running) -> None:
 
         # 入力の検査: 玄関ドアは操作できない（Web アプリを呼ぶ前に弾かれる）。曜日の指定で曜日が無いのは Web アプリが弾く
         await mcp.error("room_set_device_state", {"device": "front_door", "state": "unlocked"})
+        await mcp.error("room_create_timer", {"condition": "daily", "run_time": "03:07", "device": "front_door", "state": "on"})
+        await mcp.error("room_create_timer", {"condition": "holiday", "run_time": "03:07", "scene": "out"})
+        # 実行内容の組み合わせの検査は Web アプリが行う（両方、片方だけ、毎日なのに祝日の扱い）
+        for args in (
+            {"condition": "daily", "run_time": "03:07", "scene": "out", "device": "indirect_light", "state": "on"},
+            {"condition": "daily", "run_time": "03:07", "device": "indirect_light"},
+            {"condition": "daily", "run_time": "03:07", "scene": "out", "holiday_mode": "exclude"},
+        ):
+            assert "入力が不正です" in await mcp.error("room_create_timer", {**args, "is_enabled": False})
         text = await mcp.error("room_create_timer", {"condition": "weekdays", "run_time": "03:07", "scene": "out"})
         assert "入力が不正です" in text
 
@@ -392,4 +441,4 @@ def test_room_tools_against_webapp(running: Running) -> None:
     # 機器を操作するツールは、Web アプリへの呼び出しまで進んでいない
     assert "tool=room_set_device_state site=dev" not in text
     assert "tool=room_run_scene" not in text
-    assert "03:07" not in text and "03:08" not in text  # 定期実行の本文（時刻）は出さない
+    assert "03:07" not in text and "03:08" not in text and "03:09" not in text  # 定期実行の本文（時刻）は出さない
