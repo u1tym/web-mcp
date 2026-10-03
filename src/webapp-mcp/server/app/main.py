@@ -23,7 +23,8 @@ from app.tools import common, contract, expense, goods, knowhow, room, schedule
 from app.webapp_client import WebappClient
 
 INSTRUCTIONS = (
-    "Web アプリ（スケジュール・グッズ管理・ノウハウ管理・経費管理）のデータを参照・登録・更新・削除するツールです。"
+    "Web アプリ（スケジュール・グッズ管理・ノウハウ管理・経費管理・ROOM・契約管理）のデータを参照・登録・更新・削除するツールです。"
+    "ROOM は機器の状態の参照と操作（玄関ドアを除く）、契約管理は契約の参照・登録・更新ができます（パスワードの値は扱いません）。"
     "登録・更新で ID を指定するときは、先に一覧のツールで確かめてください。"
     "更新のツールはすべての項目を送る必要があるので、先に取得のツールで現在の値を確かめてください。"
     "接続先が複数あるときは list_sites で確かめ、引数 site で選びます。"
