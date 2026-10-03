@@ -134,5 +134,6 @@ class WebappClient:
         if status == 404 and custom.not_found:
             raise ToolError(custom.not_found)
         if status == 409 and custom.conflict:
-            raise ToolError(custom.conflict)
+            # {detail} があれば、Web アプリの detail（内部理由を含まない一文）に置き換える
+            raise ToolError(custom.conflict.replace("{detail}", detail or "処理できませんでした"))
         raise ToolError(_common_message(status, site.id, detail))

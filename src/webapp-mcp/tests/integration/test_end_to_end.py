@@ -1,17 +1,22 @@
 """結合テスト: 起動した MCP サーバに OAuth で接続し、開発環境の Web アプリに対してツールを呼ぶ。
 
 前提:
-- 開発環境の Web アプリの 5 機能のバックエンドが起動していること
-  （既定: schedule=8002, goods-management=8006, knowhow-management=8005, expense-management=8177, room=8011。
-   WEBAPP_TEST_<FEATURE>_URL で変更できる。ROOM のテスト（test_room_tools_against_webapp）は room だけでよい）
+- 開発環境の Web アプリの 6 機能のバックエンドが起動していること
+  （既定: schedule=8002, goods-management=8006, knowhow-management=8005, expense-management=8177, room=8011,
+   contract-management=8012。WEBAPP_TEST_<FEATURE>_URL で変更できる。ROOM のテスト（test_room_tools_against_webapp）は room だけ、
+   契約管理のテスト（test_contract_tools_against_webapp）は contract-management だけでよい）
 - `api-key-management` の画面で発行した API キーを、環境変数 WEBAPP_TEST_API_KEY で渡すこと
-  （キーの持ち主に 5 機能が割り当てられていること）。無いときはこのテストをスキップする。
+  （キーの持ち主に 6 機能が割り当てられていること）。無いときはこのテストをスキップする。
 
 準備データ（カテゴリ・人物・アーティスト・媒体・支出方法）は、テストの中で Web アプリの API を直接呼んで作り、最後に削除する。
 
 ROOM のテストでは、機器を操作するツール（room_set_device_state、room_run_scene）を呼ばない。
 開発環境の ROOM は実機の SwitchBot を操作するため。実機への読み取り（room_get_state）と、
 定期実行の管理（無効で登録し、最後に削除する）だけを行う。
+
+契約管理のテストでは、API キーでは契約を削除できないため、名前を固定した結合テスト用の契約を 1 件だけ作り、
+以後の実行でも使い回す（実行のたびに増やさない）。このテスト用の契約は、テストのあとも 1 件残る
+（Web アプリの画面で削除できる）。
 """
 
 from __future__ import annotations
@@ -54,6 +59,7 @@ FEATURE_URLS = {
     "knowhow-management": os.environ.get("WEBAPP_TEST_KNOWHOW_MANAGEMENT_URL", "http://127.0.0.1:8005"),
     "expense-management": os.environ.get("WEBAPP_TEST_EXPENSE_MANAGEMENT_URL", "http://127.0.0.1:8177"),
     "room": os.environ.get("WEBAPP_TEST_ROOM_URL", "http://127.0.0.1:8011"),
+    "contract-management": os.environ.get("WEBAPP_TEST_CONTRACT_MANAGEMENT_URL", "http://127.0.0.1:8012"),
 }
 CLAUDE_CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 
@@ -442,3 +448,138 @@ def test_room_tools_against_webapp(running: Running) -> None:
     assert "tool=room_set_device_state site=dev" not in text
     assert "tool=room_run_scene" not in text
     assert "03:07" not in text and "03:08" not in text and "03:09" not in text  # 定期実行の本文（時刻）は出さない
+
+
+CONTRACT_TEST_NAME = "webapp-mcp 結合テスト用"
+CONTRACT_TEST_USERNAME = "webapp-mcp-integration-user"
+
+
+def _has_key(value: Any, key: str) -> bool:
+    """データのどこかに、名前が key の項目があるか（値の文字列は見ない）。"""
+    if isinstance(value, dict):
+        return key in value or any(_has_key(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_key(v, key) for v in value)
+    return False
+
+
+def _contract_input(contract: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    """契約の応答から、更新の引数を作る（変えない項目も、現在の値のまま渡す。パスワードは含めない）。"""
+    keys = (
+        "name", "has_contract", "status", "homepage", "memo", "login_methods", "twofa_mail_address", "twofa_tel_number",
+        "username", "registered_email", "fee_amount", "fee_cycle", "renewal_date", "contract_date", "contract_date_precision",
+        "trial_end_date", "end_date", "auto_renewal", "holder_name", "member_number", "cancel_notice_days",
+        "cancellation_fee", "min_term_months", "contact_phone", "contact_email", "contact_hours", "cancellation_method",
+    )
+    args: dict[str, Any] = {key: contract[key] for key in keys if contract[key] is not None and contract[key] != []}
+    args["contract_id"] = contract["id"]
+    args["category_id"] = contract["category"]["id"]
+    if contract["depends_on"]:
+        args["depends_on_ids"] = [d["id"] for d in contract["depends_on"]]
+    if contract["payment_contract"]:
+        args["payment_contract_id"] = contract["payment_contract"]["id"]
+    args.update(changes)
+    return args
+
+
+def test_contract_tools_against_webapp(running: Running) -> None:
+    """契約管理のツール: 参照・登録・更新。パスワードの値は、入力にも出力にも無い。
+
+    API キーでは契約を削除できないため、名前を固定した結合テスト用の契約を 1 件だけ作り、使い回す。
+    """
+    _, tokens = oauth_tokens(running.base)
+
+    async def scenario(mcp: McpCaller) -> None:
+        # 区分: 「その他」が先頭
+        categories = await mcp.ok("contract_list_categories")
+        assert categories["items"][0]["name"] == "その他" and categories["items"][0]["is_default"] is True
+        assert all({"id", "name", "is_default", "is_financial"} == set(c) for c in categories["items"])
+
+        # 結合テスト用の契約を探す。無ければ、登録する（毎回は作らない）
+        found = await mcp.ok("contract_list_contracts", {"keyword": CONTRACT_TEST_NAME})
+        existing = [c for c in found["items"] if c["name"] == CONTRACT_TEST_NAME]
+        assert len(existing) <= 1, "結合テスト用の契約が複数あります。Web アプリの画面で、余分なものを削除してください"
+        if existing:
+            contract = existing[0]
+        else:
+            contract = await mcp.ok(
+                "contract_create_contract",
+                {
+                    "name": CONTRACT_TEST_NAME,
+                    "login_methods": ["password"],
+                    "username": CONTRACT_TEST_USERNAME,
+                    "fee_amount": 100,
+                    "fee_cycle": "monthly",
+                    "cancellation_method": "結合テスト用。解約の手順は無い",
+                },
+            )
+            # 登録した契約は、パスワード未設定（パスワードの値を指定する手段は無い）
+            assert contract["has_password"] is False and contract["password_unset"] is True
+        assert not _has_key(contract, "password")
+        contract_id = contract["id"]
+
+        # 詳細
+        detail = await mcp.ok("contract_get_contract", {"contract_id": contract_id})
+        assert detail["id"] == contract_id and detail["name"] == CONTRACT_TEST_NAME
+        assert not _has_key(detail, "password")
+        assert {"has_password", "password_unset", "depends_on", "payment_contract", "depended_by", "payment_for"} <= set(detail)
+
+        # 更新（全項目を渡す）。メモだけを変える。更新しても、パスワードの設定の有無は変わらない
+        memo = "結合テストの実行 B" if detail["memo"] == "結合テストの実行 A" else "結合テストの実行 A"
+        updated = await mcp.ok("contract_update_contract", _contract_input(detail, memo=memo))
+        assert updated["memo"] == memo
+        assert updated["has_password"] == detail["has_password"]
+        assert updated["password_unset"] == detail["password_unset"]
+        assert updated["name"] == detail["name"] and updated["fee_amount"] == detail["fee_amount"]
+        assert not _has_key(updated, "password")
+
+        # password を渡しても、保存されない（引数が無い。エラーになるか、無視される）
+        result = await mcp.session.call_tool(
+            "contract_update_contract", {**_contract_input(updated), "password": "integration-test-secret"}
+        )
+        again = await mcp.ok("contract_get_contract", {"contract_id": contract_id})
+        assert again["has_password"] == detail["has_password"]
+        assert "integration-test-secret" not in json.dumps(result.structured_content or result.content, default=str, ensure_ascii=False)
+
+        # 一覧の絞り込み
+        listed = await mcp.ok("contract_list_contracts", {"keyword": CONTRACT_TEST_USERNAME})
+        assert contract_id in [c["id"] for c in listed["items"]] and listed["total"] == len(listed["items"])
+        assert not _has_key(listed, "password")
+        by_status = await mcp.ok("contract_list_contracts", {"keyword": CONTRACT_TEST_NAME, "status": "active"})
+        assert contract_id in [c["id"] for c in by_status["items"]]
+        none_match = await mcp.ok("contract_list_contracts", {"keyword": CONTRACT_TEST_NAME, "has_contract": False})
+        assert contract_id not in [c["id"] for c in none_match["items"]]  # 契約を伴う契約なので、含まれない
+        unset = await mcp.ok("contract_list_contracts", {"keyword": CONTRACT_TEST_NAME, "password_unset": True})
+        assert (contract_id in [c["id"] for c in unset["items"]]) == detail["password_unset"]
+
+        # 実行のたびに、結合テスト用の契約が増えていない
+        recount = await mcp.ok("contract_list_contracts", {"keyword": CONTRACT_TEST_NAME})
+        assert len([c for c in recount["items"] if c["name"] == CONTRACT_TEST_NAME]) == 1
+
+        # 解約順（取得だけ）
+        plan = await mcp.ok("contract_get_cancellation_plan")
+        assert set(plan) == {"items", "warnings"}
+        assert not _has_key(plan, "password")
+        for item in plan["items"]:
+            assert set(item) == {"position", "contract_id", "name", "cancellation_method", "depends_on"}
+
+        # 入力の検査: 列挙の誤りは、Web アプリを呼ぶ前に弾かれる。組み合わせの誤りは、Web アプリが弾く
+        await mcp.error("contract_create_contract", {"name": "x", "status": "終了"})
+        assert "入力が不正です" in await mcp.error(
+            "contract_create_contract", {"name": "x", "has_contract": False, "fee_amount": 1, "fee_cycle": "monthly"}
+        )
+        assert "入力が不正です" in await mcp.error("contract_create_contract", {"name": "x", "fee_amount": 100})
+        assert "契約が見つかりません" in await mcp.error("contract_get_contract", {"contract_id": 2147483000})
+        assert "契約が見つかりません" in await mcp.error("contract_update_contract", {"contract_id": 2147483000, "name": "x"})
+        # 契約管理の接続先が無いサイトでは、契約管理のツールだけが使えない
+        assert "サイト broken では、この機能を利用できません" in await mcp.error("contract_list_categories", {"site": "broken"})
+
+    asyncio.run(with_session(running.base, tokens["access_token"], scenario))
+
+    text = log_text(running.log_dir)
+    assert API_KEY not in text and tokens["access_token"] not in text
+    assert "ツール呼び出し tool=contract_list_contracts site=dev" in text
+    assert "ツール呼び出し tool=contract_update_contract site=dev" in text
+    # 契約の内容（名称・ユーザ名・メモ・解約方法）と、渡されたパスワードは、ログに出ない
+    for secret in (CONTRACT_TEST_NAME, CONTRACT_TEST_USERNAME, "結合テストの実行", "結合テスト用。解約の手順は無い", "integration-test-secret"):
+        assert secret not in text, secret

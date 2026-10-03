@@ -99,6 +99,12 @@ Web アプリの応答（`rules/13-webapp-api.md`）を、ツールのエラー�
 | `room_update_timer` | W | `PUT /schedules/{schedule_id}`（room） | REQ-016 |
 | `room_set_timer_enabled` | W | `PUT /schedules/{schedule_id}/enabled`（room） | REQ-016 |
 | `room_delete_timer` | D | `DELETE /schedules/{schedule_id}`（room） | REQ-016 |
+| `contract_list_contracts` | R | `GET /contracts`（contract-management） | REQ-017 |
+| `contract_get_contract` | R | `GET /contracts/{contract_id}`（contract-management） | REQ-017 |
+| `contract_list_categories` | R | `GET /categories`（contract-management） | REQ-017 |
+| `contract_get_cancellation_plan` | R | `GET /cancellation-plan`（contract-management） | REQ-017 |
+| `contract_create_contract` | W | `POST /contracts`（contract-management） | REQ-018 |
+| `contract_update_contract` | W | `PATCH /contracts/{contract_id}`（contract-management） | REQ-018 |
 
 ## ツール詳細
 
@@ -885,6 +891,225 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
 |------|------------------|
 | 404 | 定期実行が見つかりません。ID を `room_list_timers` で確かめてください。 |
 
+### 契約管理（contract-management）
+
+契約管理は、契約（電気・動画配信・金融口座・ファンクラブなど）の情報と、解約の手順を管理する機能である。契約を伴わないアカウント（ユーザ名とパスワードだけを控えるもの）も扱う。
+
+- **パスワードの値は、入力にも出力にも無い**（REQ-017、REQ-018）。登録・更新のツールに、パスワードの引数は無い。出力には、値の代わりに、設定されているか（`has_password`）と、「パスワード未設定」か（`password_unset`）だけが入る。パスワードは、人が Web アプリの画面で入力・変更する。
+- Web アプリが API キーで許可していない操作（契約の削除、パスワードの値の取得、アカウント一覧、区分の追加・変更・削除、解約順の保存・候補の取得）のツールは、無い。
+- 契約には、「契約を伴う」（`has_contract` が `true`）と「契約を伴わない」（`false`）の別がある。契約を伴わない契約は、契約を伴う契約だけの項目（維持費、更新日、契約日、無料期間の終了日、契約終了日、自動更新、契約者名義、会員番号・契約番号、解約の受付期限、解約手数料・違約金、最低契約期間、問い合わせ先、解約方法、依存契約、支払方法）を持たない。
+- 更新のツールは、共通事項の「更新のツールの考え方」の例外とし、名称以外の項目を任意の引数にする（Web アプリの更新 API が、名称以外の項目を省略可能としているため）。送らなかった任意の項目は空になるので、ツールの説明に、先に取得して、現在の値のまま渡すことを書く。
+- 値の表し方は、Web アプリと同じ。
+
+契約（`contract`）の形（Web アプリの応答のまま）:
+
+```json
+{
+  "id": 12,
+  "name": "ネット動画サービス",
+  "has_contract": true,
+  "category": { "id": 3, "name": "動画配信", "is_financial": false },
+  "status": "active",
+  "homepage": "https://video.example.com",
+  "memo": null,
+  "login_methods": ["password", "2fa_mail"],
+  "twofa_mail_address": "me@example.com",
+  "twofa_tel_number": null,
+  "username": "taro@example.com",
+  "has_password": true,
+  "password_unset": false,
+  "registered_email": "taro@example.com",
+  "fee_amount": 990,
+  "fee_cycle": "monthly",
+  "renewal_date": "2026-11-05",
+  "contract_date": "2020-04",
+  "contract_date_precision": "month",
+  "trial_end_date": null,
+  "end_date": null,
+  "auto_renewal": true,
+  "holder_name": "山田 太郎",
+  "member_number": "A-123456",
+  "cancel_notice_days": 7,
+  "cancellation_fee": "なし",
+  "min_term_months": 12,
+  "contact_phone": "0120-000-000",
+  "contact_email": "support@example.com",
+  "contact_hours": "平日 10:00-18:00",
+  "cancellation_method": "マイページの設定から解約する",
+  "depends_on": [{ "id": 8, "name": "プロバイダ" }],
+  "payment_contract": { "id": 5, "name": "Aカード" },
+  "depended_by": [],
+  "payment_for": []
+}
+```
+
+| 項目 | 意味 |
+|------|------|
+| `status` | `active`（有効）、`paused`（休止中）、`cancelled`（解約） |
+| `login_methods` | `password`（ユーザ名とパスワード）、`passkey`（パスキー）、`2fa_mail`（2 段階認証（メール））、`2fa_tel`（2 段階認証（TEL））の配列 |
+| `has_password` / `password_unset` | パスワードが設定されているか。`password_unset` は、ログイン方法に `password` を含み、パスワードが未設定（人の入力待ち）。パスワードの値は返らない |
+| `fee_amount` / `fee_cycle` | 維持費。0 以上の整数と、`yearly`（年間）または `monthly`（月額）。どちらも無いか、どちらも有る |
+| `contract_date` / `contract_date_precision` | 契約日と、その精度（`day`、`month`、`year`、`unknown`）。`contract_date` は精度に応じた形式（`YYYY-MM-DD`、`YYYY-MM`、`YYYY`）。精度が `unknown` のときは `contract_date` は `null` |
+| `end_date` | 契約終了日。ステータスが `cancelled` のときだけ持てる |
+| `auto_renewal` | 自動更新。`true`（あり）、`false`（なし）、`null`（未設定） |
+| `depends_on` | 依存契約（その契約が成り立つ前提の契約） |
+| `payment_contract` | 支払方法として選んだ契約（金融機関の区分の契約）。無いときは `null` |
+| `depended_by` / `payment_for` | この契約に依存している契約 / この契約を支払方法としている契約 |
+
+契約を伴わない契約では、契約を伴う契約だけの項目は `null`（配列は `[]`）になる。
+
+#### `contract_list_contracts`
+
+- **説明**: 契約管理の契約の一覧を返します。契約（電気・動画配信・金融口座など）の情報が分かります。契約を伴わない、ユーザ名とパスワードだけを控えたアカウントも含みます。キーワード（名称・ホームページ・登録メールアドレス・ユーザ名・メモ）、区分、ステータス、契約を伴うか伴わないか、パスワードが未設定のものだけ、で絞り込めます（組み合わせると、すべてに合うものだけを返します）。**パスワードの値は返りません**（設定されているかと、未設定かどうかだけが分かります）。`password_unset` が `true` の契約は、人が Web アプリの画面でパスワードを入力するのを待っています。更新・詳細で使う ID も、ここで確かめます。
+- **注釈**: R
+- **呼び出す API**: `GET /contracts`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `keyword` | string | 任意 | 名称・ホームページ・登録メールアドレス・ユーザ名・メモの部分一致（大文字小文字を区別しない）。パスワードは対象外 |
+| `category_id` | integer | 任意 | 区分で絞り込む（`contract_list_categories` の ID） |
+| `status` | `"active"` \| `"paused"` \| `"cancelled"` | 任意 | ステータスで絞り込む |
+| `has_contract` | boolean | 任意 | `true` で契約を伴うもの、`false` で契約を伴わないもの |
+| `password_unset` | boolean | 任意 | `true` のとき、パスワードが未設定のものだけ。`false` は絞り込まない |
+
+- **出力**: Web アプリの応答（`total` は件数、`items` は契約を登録順に）
+
+```json
+{ "total": 1, "items": [ { "...": "契約（contract）の形" } ] }
+```
+
+- **エラー**: 共通エラーのみ（`status` などの値の誤りは、入力スキーマの列挙で検査される）
+
+#### `contract_get_contract`
+
+- **説明**: 契約管理の契約を 1 件、詳細に返します。維持費、更新日、契約日、ログイン方法、2 段階認証の送付先、ユーザ名、登録メールアドレス、依存契約、支払方法、解約方法、問い合わせ先などが分かります。この契約に依存している契約と、この契約を支払方法としている契約も分かります。**パスワードの値は返りません。**
+- **注釈**: R
+- **呼び出す API**: `GET /contracts/{contract_id}`
+- **入力**
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `contract_id` | integer | 必須 | 取得する契約 |
+
+- **出力**: 契約（`contract`）の形
+- **エラー**: 共通エラーのほか
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 404 | 契約が見つかりません。ID を `contract_list_contracts` で確かめてください（削除済みのものも見つかりません）。 |
+
+#### `contract_list_categories`
+
+- **説明**: 契約管理の区分の一覧を返します。区分は、契約の分類です（「その他」は最初から用意されています）。契約の登録・更新で、区分を指定するために使います。`is_financial` が `true` の区分（銀行・カードなど、金融機関）の契約だけが、他の契約の**支払方法**に選べます。
+- **注釈**: R
+- **呼び出す API**: `GET /categories`
+- **入力**: なし
+- **出力**: Web アプリの応答（「その他」が先頭、続いて ID 昇順）
+
+```json
+{
+  "items": [
+    { "id": 1, "name": "その他", "is_default": true, "is_financial": false },
+    { "id": 3, "name": "動画配信", "is_default": false, "is_financial": false },
+    { "id": 4, "name": "銀行・カード", "is_default": false, "is_financial": true }
+  ]
+}
+```
+
+- **エラー**: 共通エラーのみ
+
+#### `contract_get_cancellation_plan`
+
+- **説明**: 契約管理の解約順（解約する契約を、解約する順に並べたもの）を返します。各契約の名称、解約方法、依存契約が分かります。ある契約が依存している契約が、その契約より先に解約される並びになっているときは、`warnings` に出ます（解約の順序を決めるときの注意に使います）。解約順の保存は、Web アプリの画面で行います（このツールは取得だけです）。**パスワードなどは返りません。**
+- **注釈**: R
+- **呼び出す API**: `GET /cancellation-plan`
+- **入力**: なし
+- **出力**: Web アプリの応答
+
+```json
+{
+  "items": [
+    {
+      "position": 1,
+      "contract_id": 12,
+      "name": "ネット動画サービス",
+      "cancellation_method": "マイページの設定から解約する",
+      "depends_on": [{ "id": 8, "name": "プロバイダ" }]
+    }
+  ],
+  "warnings": [
+    {
+      "contract_id": 12,
+      "name": "ネット動画サービス",
+      "depends_on_contract_id": 8,
+      "depends_on_name": "プロバイダ"
+    }
+  ]
+}
+```
+
+- `items`: 解約の対象を、解約順（`position` の昇順）に。解約方法が未入力のときは `cancellation_method` が `null`。
+- `warnings`: `contract_id` の契約が `depends_on_contract_id` の契約に依存していて、後者が先に解約順に並んでいる組。無いときは `[]`。
+
+- **エラー**: 共通エラーのみ
+
+#### `contract_create_contract`
+
+- **説明**: 契約管理の契約を 1 件登録します。**名称だけが必須**です。契約（電気・動画配信など）を伴う場合は、維持費、更新日、契約日、解約方法などを指定できます。ユーザ名とパスワードだけを控えるアカウントは、`has_contract` を `false` にします（契約を伴わない契約は、維持費、更新日、契約日、無料期間の終了日、契約終了日、自動更新、契約者名義、会員番号・契約番号、解約の受付期限、解約手数料・違約金、最低契約期間、問い合わせ先、解約方法、依存契約、支払方法を指定できません）。区分を省略すると「その他」になります。ステータスの既定は有効（`active`）です。支払方法には、金融機関の区分の契約だけを指定できます（区分は `contract_list_categories` で確かめます）。**パスワードの値は、指定できません。** 登録した契約は、パスワード未設定になり、人が Web アプリの画面でパスワードを入力します。
+- **注釈**: W
+- **呼び出す API**: `POST /contracts`
+- **入力**（`password` の引数は無い。この表に無い項目は、指定できない）
+
+| 引数 | 型 | 必須 | 説明 |
+|------|----|------|------|
+| `name` | string | 必須 | 名称。前後の空白を除いて、空でなく、200 文字以内 |
+| `has_contract` | boolean | 任意 | 契約を伴うか。既定 `true`。`false` は、契約を伴わない（アカウントの控えだけ） |
+| `category_id` | integer | 任意 | 区分。省略すると「その他」 |
+| `status` | `"active"` \| `"paused"` \| `"cancelled"` | 任意 | ステータス。既定 `active`（有効）。`paused` = 休止中、`cancelled` = 解約 |
+| `homepage` | string \| null | 任意 | ホームページ |
+| `memo` | string \| null | 任意 | メモ |
+| `login_methods` | (`"password"` \| `"passkey"` \| `"2fa_mail"` \| `"2fa_tel"`)[] | 任意 | ログイン方法（重複なし）。`password` = ユーザ名とパスワード |
+| `twofa_mail_address` | string \| null | 任意 | 2 段階認証（メール）の送付先。`login_methods` に `2fa_mail` があるときだけ指定できる |
+| `twofa_tel_number` | string \| null | 任意 | 2 段階認証（TEL）の送付先。`login_methods` に `2fa_tel` があるときだけ指定できる |
+| `username` | string \| null | 任意 | ユーザ名 |
+| `registered_email` | string \| null | 任意 | 登録メールアドレス |
+| `fee_amount` | integer \| null | 任意 | 維持費の金額（0 以上）。契約を伴うときだけ。`fee_cycle` と一緒に指定する |
+| `fee_cycle` | `"yearly"` \| `"monthly"` \| null | 任意 | 維持費の周期（年間、月額）。`fee_amount` と一緒に指定する |
+| `renewal_date` | string（日付 `YYYY-MM-DD`）\| null | 任意 | 更新日。契約を伴うときだけ |
+| `contract_date_precision` | `"day"` \| `"month"` \| `"year"` \| `"unknown"` \| null | 任意 | 契約日の精度（年月日、年月、年、不明）。契約を伴うときだけ |
+| `contract_date` | string \| null | 任意 | 契約日。精度が `day` なら `YYYY-MM-DD`、`month` なら `YYYY-MM`、`year` なら `YYYY`。精度が `unknown` または無いときは指定しない |
+| `trial_end_date` | string（日付）\| null | 任意 | 無料期間の終了日。契約を伴うときだけ |
+| `end_date` | string（日付）\| null | 任意 | 契約終了日。契約を伴うかつ `status` が `cancelled` のときだけ |
+| `auto_renewal` | boolean \| null | 任意 | 自動更新。`true` = あり、`false` = なし、`null` = 未設定。契約を伴うときだけ |
+| `holder_name` | string \| null | 任意 | 契約者名義。契約を伴うときだけ |
+| `member_number` | string \| null | 任意 | 会員番号・契約番号。契約を伴うときだけ |
+| `cancel_notice_days` | integer \| null | 任意 | 解約の受付期限（更新日の何日前まで。0 以上）。契約を伴うときだけ |
+| `cancellation_fee` | string \| null | 任意 | 解約手数料・違約金。契約を伴うときだけ |
+| `min_term_months` | integer \| null | 任意 | 最低契約期間（月数。0 以上）。契約を伴うときだけ |
+| `contact_phone` / `contact_email` / `contact_hours` | string \| null | 任意 | 問い合わせ先の電話番号・メールアドレス・受付時間。契約を伴うときだけ |
+| `cancellation_method` | string \| null | 任意 | 解約方法（複数行可）。契約を伴うときだけ |
+| `depends_on_ids` | integer[] | 任意 | 依存契約（その契約が成り立つ前提の契約）の ID（重複なし、自分以外）。契約を伴うときだけ |
+| `payment_contract_id` | integer \| null | 任意 | 支払方法として選ぶ契約の ID。**金融機関の区分の契約だけ**。契約を伴うときだけ |
+
+- **出力**: 登録された契約（`contract` の形。`has_password` は `false`、ログイン方法に `password` があれば `password_unset` は `true`）
+- **エラー**: 共通エラーのみ（入力不正は 400 の共通エラー文で返る。契約を伴わないのに契約の項目がある、維持費の金額と周期の片方だけ、契約日と精度の不整合、契約終了日がステータス `cancelled` でない、2 段階認証の送付先と方式の不一致、支払方法が金融機関の区分の契約でない、依存契約・支払方法・区分が他人のもの・削除済み、などは、Web アプリが 400 で拒否する）
+- **注意**: 値の範囲（列挙）と型は、入力スキーマで検査される。項目の組み合わせの検査は、ツールでは行わず、Web アプリの検査に任せる（`design.md`）。`password` など、定義に無い引数は、Web アプリへ送られない。
+
+#### `contract_update_contract`
+
+- **説明**: 登録済みの契約管理の契約を更新します。**名称以外の項目も、現在の値のまま渡してください。送らなかった任意の項目は、空に更新されます**（`null`、依存契約は空）。先に `contract_get_contract` で現在の値を確かめ、変えない項目も、現在の値のまま渡します（応答の `category.id` を `category_id` に、`depends_on` の ID を `depends_on_ids` に、`payment_contract.id` を `payment_contract_id` に渡します）。契約を伴うか（`has_contract`）と、ステータスも、省略すると、`has_contract` は `true`、ステータスは `active`、区分は「その他」に戻ります。契約を伴うから伴わないに変えると、契約を伴う契約だけの項目は消え、解約順の対象からも外れます。**パスワードの値は、指定できません。更新しても、保存済みのパスワードは変わりません**（消えも、書き換わりもしません）。パスワードは、人が Web アプリの画面で入力・変更します。
+- **注釈**: W
+- **呼び出す API**: `PATCH /contracts/{contract_id}`
+- **入力**: `contract_id`（integer、必須。更新する契約）と、`contract_create_contract` と同じ項目（`name` は必須、それ以外は任意だが、省略すると空または既定に戻る）。`password` の引数は無い。
+- **出力**: 更新後の契約（`contract` の形）
+- **エラー**: 共通エラーのほか
+
+| 条件 | ツールのエラー文 |
+|------|------------------|
+| 404 | 契約が見つかりません。ID を `contract_list_contracts` で確かめてください（削除済みのものも見つかりません）。 |
+| 409 | Web アプリが更新を受け付けませんでした。依存契約の関係が循環している、または、他の契約の支払方法になっている契約の区分を、金融機関でない区分に変えようとした可能性があります。（Web アプリ: `<detail>`） |
+
 ## 要件トレーサビリティ
 
 | 要件 | ツール・節 |
@@ -904,6 +1129,8 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
 | REQ-014 | `room_get_state` |
 | REQ-015 | `room_set_device_state`、`room_run_scene`（玄関ドアのツールは無い） |
 | REQ-016 | `room_list_timers`、`room_create_timer`、`room_update_timer`、`room_set_timer_enabled`、`room_delete_timer` |
+| REQ-017 | `contract_list_contracts`、`contract_get_contract`、`contract_list_categories`、`contract_get_cancellation_plan` |
+| REQ-018 | `contract_create_contract`、`contract_update_contract`（パスワードの引数は無い。削除・区分の管理・解約順の保存のツールは無い） |
 
 ## 承認
 
@@ -919,3 +1146,5 @@ ROOM の 502（機器を操作できなかった）は、次のエラー文で�
 | 2026-10-01 13:17 | 承認済み | ROOM のツール 8 個の追加を承認 |
 | 2026-10-02 11:13 | 未承認 | REQ-016 の改訂に合わせ、`room_list_timers`・`room_create_timer`・`room_update_timer` に、祝日の扱い（`holiday_mode`）、実行日の取り方（`day_shift`）、機器の個別切替（`device`・`state`）を追加し、実行条件から `holiday` を廃止。個別切替の結果の扱い、更新で省略したときの既定への復帰を追記 |
 | 2026-10-02 11:14 | 承認済み | 定期実行のツールの改訂（個別切替、祝日の扱い、実行日の取り方）を承認 |
+| 2026-10-03 12:50 | 未承認 | 契約管理のツール 6 個（contract_list_contracts、contract_get_contract、contract_list_categories、contract_get_cancellation_plan、contract_create_contract、contract_update_contract）を追加。パスワードの引数・出力は無い |
+| 2026-10-03 12:56 | 承認済み | 契約管理のツール 6 個の追加を承認 |

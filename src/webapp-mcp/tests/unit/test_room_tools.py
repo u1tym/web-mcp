@@ -134,8 +134,8 @@ async def test_room_tools_exist_with_annotations(mcp: MCPServer) -> None:
     assert "元に戻せません" in (tools["room_delete_timer"].description or "")
 
 
-async def test_total_tool_count_is_39(mcp: MCPServer) -> None:
-    assert len(await list_tools(mcp)) == 39
+async def test_total_tool_count_is_45(mcp: MCPServer) -> None:
+    assert len(await list_tools(mcp)) == 45  # 契約管理の 6 個を含む
 
 
 async def test_no_tool_can_operate_the_front_door(mcp: MCPServer) -> None:

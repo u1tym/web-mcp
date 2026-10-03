@@ -23,6 +23,10 @@ def test_loads_config_and_sites(tmp_path: Path) -> None:
     assert registry.resolve(None).base_url("room") == "http://webapp.test/room"
     with pytest.raises(FeatureNotConfiguredError):
         registry.resolve("office").base_url("room")
+    # 契約管理の接続先。office には contract-management が無い
+    assert registry.resolve(None).base_url("contract-management") == "http://webapp.test/contract"
+    with pytest.raises(FeatureNotConfiguredError):
+        registry.resolve("office").base_url("contract-management")
 
 
 def test_unknown_site(tmp_path: Path) -> None:
@@ -64,6 +68,8 @@ def test_missing_api_key_stops_startup(tmp_path: Path) -> None:
         ('default_site = "home"\n[sites.home]\nkind = "other"\n', "種別"),
         ('default_site = "Home"\n[sites.Home]\nkind = "claude_webapp"\n', "識別子"),
         ('default_site = "home"\n[sites.home]\nkind = "claude_webapp"\n[sites.home.api]\nnotes = "http://x"\n', "未知の機能"),
+        # 契約管理に似た名前（contract、contracts）は、未知の機能として拒否される
+        ('default_site = "home"\n[sites.home]\nkind = "claude_webapp"\n[sites.home.api]\ncontract = "http://x"\n', "未知の機能"),
         # room に似た名前は、未知の機能として拒否される
         ('default_site = "home"\n[sites.home]\nkind = "claude_webapp"\n[sites.home.api]\nrooms = "http://x"\n', "未知の機能"),
     ],

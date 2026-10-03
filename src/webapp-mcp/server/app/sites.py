@@ -8,7 +8,7 @@ from pathlib import Path
 from app.config import Config, ConfigError
 
 SUPPORTED_KINDS = ("claude_webapp",)
-FEATURES = ("schedule", "goods-management", "knowhow-management", "expense-management", "room")
+FEATURES = ("schedule", "goods-management", "knowhow-management", "expense-management", "room", "contract-management")
 
 _SITE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 

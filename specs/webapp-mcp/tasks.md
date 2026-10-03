@@ -8,7 +8,7 @@
 - ソース配置: `src/webapp-mcp/server`（MCP サーバ）、`src/webapp-mcp/tests`（`unit/`、`integration/`）
 - 起動: `uvicorn app.main:app --host 127.0.0.1 --port 9001`（作業ディレクトリ `src/webapp-mcp/server`、venv は `server/venv`）
 - SDK: `mcp` 2.x（`MCPServer`）。Web アプリの Python は import しない。Web アプリの DB に接続しない。
-- 結合テストは、開発環境の Web アプリ（5 機能のバックエンド）と、`api-key-management` の画面で発行した API キーを使う。API キーは環境変数 `WEBAPP_TEST_API_KEY` で渡し、無いときは結合テストをスキップする。
+- 結合テストは、開発環境の Web アプリ（6 機能のバックエンド）と、`api-key-management` の画面で発行した API キーを使う。API キーは環境変数 `WEBAPP_TEST_API_KEY` で渡し、無いときは結合テストをスキップする。
 
 ## タスク一覧
 
@@ -31,6 +31,8 @@
 | T-015 | ROOM のツールの追加（サイトの機能 `room`、ツール 8 個、単体テスト） | REQ-012〜REQ-016 / design.md §利用する Web アプリの機能・§モジュール構成・§ツール一覧、tool-design.md §ROOM | `src/webapp-mcp/server/app/sites.py`、`server/app/tools/room.py`、`server/app/main.py`、`tests/conftest.py`、`tests/unit/test_tools.py`、`tests/unit/test_config_sites.py` | 4h | 下記 T-015 |
 | T-016 | ROOM の結合テストと、手順書・設定の更新 | REQ-003、REQ-014〜REQ-016 / design.md §テスト・§配置 | `tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md`、`server/sites.toml`（運用の設定。リポジトリに含めない） | 3h | 下記 T-016 |
 | T-017 | ROOM の定期実行のツールの改訂（個別切替・祝日の扱い・実行日の取り方）と、手順書の更新 | REQ-016 / design.md §ROOM のツールの考え方、tool-design.md §`room_list_timers`・`room_create_timer`・`room_update_timer` | `server/app/tools/room.py`、`tests/unit/test_room_tools.py`、`tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md` | 3h | 下記 T-017 |
+| T-018 | 契約管理のツールの追加（サイトの機能 `contract-management`、ツール 6 個、単体テスト） | REQ-012、REQ-013、REQ-017、REQ-018 / design.md §利用する Web アプリの機能・§モジュール構成・§ツール一覧・§契約管理のツールの考え方、tool-design.md §契約管理 | `server/app/sites.py`、`server/app/tools/contract.py`、`server/app/main.py`、`tests/conftest.py`、`tests/unit/test_contract_tools.py`、`tests/unit/test_config_sites.py` | 4h | 下記 T-018 |
+| T-019 | 契約管理の結合テストと、手順書・設定の更新 | REQ-003、REQ-017、REQ-018 / design.md §テスト・§配置 | `tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md`、`specs/templates/sites.example.toml`、`server/sites.toml`（運用の設定。リポジトリに含めない） | 3h | 下記 T-019 |
 
 ---
 
@@ -313,6 +315,63 @@ Web アプリの経費管理機能の改訂（`payment_methods` への `is_credi
 - [ ] ログに、定期実行の曜日・時刻が出ていない
 - [ ] `server/venv` の pytest（単体）が、既存のテストを含めて、全件成功する。`WEBAPP_TEST_API_KEY` を設定した結合テストも、全件成功する
 
+## T-018: 契約管理のツールの追加
+
+**実装パス**: `server/app/sites.py`、`server/app/tools/contract.py`、`server/app/main.py`、`tests/conftest.py`、`tests/unit/test_contract_tools.py`、`tests/unit/test_config_sites.py`
+
+**内容**
+
+- `sites.py`: サイトの機能名（`FEATURES`）に `contract-management` を足す。`sites.toml` に `contract-management` の接続先が無いサイトは、従来どおり起動でき、契約管理のツールだけが「このサイトでは、この機能を利用できません（接続先が設定されていません）」を返す。
+- `tools/contract.py`: ツール 6 個（`contract_list_contracts`、`contract_get_contract`、`contract_list_categories`、`contract_get_cancellation_plan`、`contract_create_contract`、`contract_update_contract`）を、`tool-design.md` のとおりに実装する。`main.py` で `contract.register` を呼ぶ。
+  - 名前・説明・注釈（`READ`・`WRITE`）・入力（型・必須・列挙）・出力・エラー文を、`tool-design.md` と一致させる。引数 `site` を持たせる。
+  - **`password` の引数を、どのツールにも持たせない。** `contract_create_contract`・`contract_update_contract` に `password` が渡されても、Web アプリへ送らない。出力は、Web アプリの応答のまま（パスワードの値は、そもそも応答に無い）。
+  - 送る本文は、渡された引数だけを、Web アプリの `POST` / `PATCH /contracts` の項目名のまま送る（省略した項目は送らない。契約を伴うか伴わないかと、項目の組み合わせの整合は、検査せず、Web アプリに任せる）。`contract_update_contract` の `contract_id` は、パスに入れ、本文には入れない。
+  - `contract_list_contracts` の絞り込みは、渡された引数だけを、クエリ（`keyword`、`category_id`、`status`、`has_contract`、`password_unset`）に載せる。真偽は `true` / `false` の文字列。
+  - `status`・`fee_cycle`・`contract_date_precision`・`login_methods` の要素は、列挙とする。`fee_amount` などの整数は `integer`。
+  - 404 は、契約のツール（`contract_get_contract`・`contract_update_contract`）で、`tool-design.md` の専用の文（`contract_list_contracts` を案内）にする。`contract_update_contract` の 409 は、専用の文（Web アプリの `detail` を含む）にする。他は共通の文のまま。
+  - 出力は、Web アプリの応答の項目名・値を変えない。
+  - ログ: ツール名・サイト・判断に使う引数（`contract_id`、`category_id`、`status`、`has_contract`、`password_unset`、`keyword` の有無）。**契約の名称、ユーザ名、登録メールアドレス、2 段階認証の送付先、解約方法、メモは出さない。**
+- 単体テスト: `respx` のモックで確かめる。
+- `tests/conftest.py` のテスト用 `sites.toml` に、`contract-management` の接続先を足す。
+
+**完了条件**
+
+- [ ] `respx` のモックで、6 個のツールが呼ぶメソッド・パス・クエリ・本文が、`tool-design.md` と、`claude_webapp/specs/contract-management/api-design.md` に一致する（`GET /contracts` のクエリ、`POST /contracts` と `PATCH /contracts/{id}` の本文）
+- [ ] 各ツールの成功時の出力と、個別のエラー文（`contract_get_contract`・`contract_update_contract` の 404、`contract_update_contract` の 409）が、`tool-design.md` と一致する
+- [ ] 注釈（`readOnlyHint`・`destructiveHint`・`idempotentHint`）が、`tool-design.md` と一致する（参照の 4 個は読み取り専用。登録・更新は書き込みで、破壊的でない）
+- [ ] どのツールの入力スキーマにも `password` が無く、`contract_create_contract`・`contract_update_contract` に `password` を渡しても、Web アプリへの要求の本文に `password` が含まれない。削除・パスワードの取得・アカウント一覧・区分の管理・解約順の保存のツールは、ツール一覧のどこにも無い
+- [ ] 列挙の誤り（`status`・`fee_cycle`・`contract_date_precision`・`login_methods`）と、型の誤りが、Web アプリを呼ばずに、入力検証のエラーになる
+- [ ] 省略した引数が、本文・クエリに載らない。`contract_update_contract` が `contract_id` を本文に載せない
+- [ ] 契約を伴わないのに契約の項目を渡す、維持費の金額だけを渡す、などの場合は、ツールは検査せず Web アプリを呼び、Web アプリの 400 を、共通エラー文として返す
+- [ ] `contract-management` の接続先が無いサイトで、契約管理のツールが「接続先が設定されていません」を返し、他の機能のツールは動く
+- [ ] ログに、API キー全体と、契約の名称・ユーザ名・登録メールアドレス・2 段階認証の送付先・解約方法・メモが出ていない
+- [ ] `server/venv` の pytest（単体）が、既存のテストを含めて、全件成功する
+
+## T-019: 契約管理の結合テストと、手順書・設定の更新
+
+**実装パス**: `tests/integration/test_end_to_end.py`、`src/webapp-mcp/README.md`、`specs/templates/sites.example.toml`、`server/sites.toml`（運用の設定。リポジトリに含めない）
+
+**内容**
+
+- 結合テスト: 開発環境の Web アプリの契約管理（`contract-management` のバックエンド）に対して、MCP クライアント（SDK のクライアント）からツールを呼ぶ。
+  - `contract_list_categories`: 「その他」が先頭にあること。
+  - 契約: 結合テスト用の契約（名称を固定。例「webapp-mcp 結合テスト用」）を、**一覧で探し、無ければ `contract_create_contract` で登録する**（API キーでは契約を削除できないため、毎回は作らず、1 件を使い回す）。`contract_get_contract` → `contract_update_contract`（全項目を渡す）→ `contract_list_contracts`（絞り込み）の順に確かめる。
+  - **パスワードの値が、どの応答にも無い**こと。登録した契約が `password_unset` を持つこと。`contract_update_contract` で更新しても、`has_password` が変わらないこと。
+  - `contract_get_cancellation_plan`: 取得できること（読み取りだけ）。
+  - 契約を削除するツールは無いため、結合テスト用の契約は、テストのあとも 1 件残る（運用者が、Web アプリの画面で削除できる）。
+- `README.md`: 「5 機能」の記述を 6 機能（`contract-management` を含む）に直す。API キーの持ち主に、`contract-management` の割当が必要なことを足す。契約管理のツールの説明（パスワードの値は入出力しない、パスワードは人が画面で入力する、更新は全項目の置き換えで先に取得して渡す、削除・区分の管理・解約順の保存は人が画面で行う）を足す。結合テストの前提に、契約管理のバックエンドの起動と、`contract-management` の割当を足す。
+- `specs/templates/sites.example.toml`: `contract-management` の接続先の例を足す。
+- `server/sites.toml`: 運用の設定に、`contract-management` の接続先を足す（開発では `http://127.0.0.1:8012`）。API キーは、既存のものを使う（持ち主に `contract-management` が割り当てられていること）。
+
+**完了条件**
+
+- [ ] 結合テストで、`contract_list_categories` が「その他」を返し、契約の登録（または、既存のテスト用の契約の再利用）・取得・更新・一覧の絞り込みが行える
+- [ ] 結合テストで、どの応答にもパスワードの値が無く、更新しても `has_password` が変わらない
+- [ ] 結合テストが、2 回続けて実行しても、テスト用の契約を増やさない（1 件を使い回す）
+- [ ] `WEBAPP_TEST_API_KEY` が無いときは、契約管理の結合テストもスキップされる
+- [ ] `README.md` が、6 機能と契約管理のツールの注意（パスワードの値は入出力しない、削除はできない）を示し、秘密の値の実例を含まない
+- [ ] `server/venv` の pytest（単体）と、`WEBAPP_TEST_API_KEY` を設定した結合テストが、全件成功する
+
 ## 承認
 
 現在の状態: 承認済み
@@ -327,3 +386,5 @@ Web アプリの経費管理機能の改訂（`payment_methods` への `is_credi
 | 2026-10-01 13:19 | 承認済み | ROOM のツール追加のタスク（T-015・T-016）を承認 |
 | 2026-10-02 11:15 | 未承認 | ROOM の定期実行のツールの改訂のタスク T-017 を追加（REQ-016 の改訂への対応） |
 | 2026-10-02 11:15 | 承認済み | T-017 を承認 |
+| 2026-10-03 12:56 | 未承認 | 契約管理のツール追加（REQ-017、REQ-018）のタスク T-018（サイトの機能・ツール 6 個・単体テスト）と T-019（結合テスト・手順書・設定）を追加。パスワードの引数は持たせない。結合テストは、契約を削除できないため、テスト用の契約 1 件を使い回す |
+| 2026-10-03 12:59 | 承認済み | 契約管理のツール追加のタスク（T-018・T-019）を承認 |

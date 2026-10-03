@@ -31,6 +31,7 @@ goods-management = "http://webapp.test/goods"
 knowhow-management = "http://webapp.test/knowhow"
 expense-management = "http://webapp.test/expense"
 room = "http://webapp.test/room"
+contract-management = "http://webapp.test/contract"
 
 [sites.office]
 title = "事務所"

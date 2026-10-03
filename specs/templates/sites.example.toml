@@ -14,6 +14,7 @@ goods-management = "http://localhost:8006"
 knowhow-management = "http://localhost:8005"
 expense-management = "http://localhost:8177"
 room = "http://localhost:8011"
+contract-management = "http://localhost:8012"
 
 # サイトを増やすときの例
 # [sites.office]

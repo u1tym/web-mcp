@@ -4,7 +4,7 @@
 
 ## 全体構成
 
-本設計は `requirements.md` の REQ-001〜REQ-016 を満たす。
+本設計は `requirements.md` の REQ-001〜REQ-018 を満たす。
 
 ```
 MCP クライアント                         MCP サーバ（webapp-mcp）                        Web アプリ（サイトごと）
@@ -12,8 +12,8 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
  Claude Code ───────────────────┼─https─▶│ nginx ─▶ uvicorn（127.0.0.1:9001）│─API キー─▶├ goods-management
  Microsoft 365 Copilot ─────────┘ OAuth   │  ├ OAuth 認可サーバ＋サインイン画面 │  Bearer   ├ knowhow-management
                                   トークン │  ├ MCP（/mcp）＋ツール             │           ├ expense-management
-                                          │  └ SQLite（認証の状態）            │           └ room
-                                          └───────────────────────────────┘
+                                          │  └ SQLite（認証の状態）            │           ├ room
+                                          └───────────────────────────────┘           └ contract-management
 ```
 
 - MCP サーバは 1 プロセス。公式 Python SDK（`mcp` 2.x）の `MCPServer` で、MCP のエンドポイント・OAuth 認可サーバ・サインイン画面を 1 つの ASGI アプリとして提供する。
@@ -32,6 +32,7 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `knowhow-management` | `claude_webapp/specs/knowhow-management/api-design.md` |
 | `expense-management` | `claude_webapp/specs/expense-management/api-design.md` |
 | `room` | `claude_webapp/specs/room/api-design.md` |
+| `contract-management` | `claude_webapp/specs/contract-management/api-design.md` |
 
 各機能の API は「対象機能の API キー認証」（`claude_webapp/specs/api-key-management/api-design.md`）で呼ぶ。サイトの構成（`sites.toml`）と API キー（`.env`）の扱いは `rules/13-webapp-api.md`。
 
@@ -70,7 +71,7 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `WEBAPP_TIMEOUT_SECONDS` | `10` |
 | `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` | `1048576` / `5` |
 
-`server/sites.toml`（ひな型 `specs/templates/sites.example.toml`）: 既定のサイトと、サイトごとの識別子・表示名・種別・5 機能の API 基点 URL。MCP サーバと Web アプリを同じホストに置くときは、Web アプリの各バックエンドの `http://127.0.0.1:<port>` を書いてよい（通信がホストの外に出ないため）。別のホストのときは https の URL を書く。
+`server/sites.toml`（ひな型 `specs/templates/sites.example.toml`）: 既定のサイトと、サイトごとの識別子・表示名・種別・6 機能の API 基点 URL。MCP サーバと Web アプリを同じホストに置くときは、Web アプリの各バックエンドの `http://127.0.0.1:<port>` を書いてよい（通信がホストの外に出ないため）。別のホストのときは https の URL を書く。
 
 ### モジュール構成
 
@@ -87,6 +88,7 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `app/tools/knowhow.py` | ノウハウ管理のツール |
 | `app/tools/expense.py` | 経費管理のツール |
 | `app/tools/room.py` | ROOM のツール |
+| `app/tools/contract.py` | 契約管理のツール |
 | `app/auth/store.py` | SQLite による認証の状態の保存（後述のテーブル）。トークンは SHA-256 のハッシュで保存・照合する |
 | `app/auth/provider.py` | SDK の `OAuthAuthorizationServerProvider` の実装。クライアント登録（リダイレクト URI の許可リストの照合）、認可（サインイン画面への誘導）、認可コード・アクセストークン・リフレッシュトークンの発行・照合・ローテーション・失効 |
 | `app/auth/passphrase.py` | パスフレーズの scrypt ハッシュの作成と、定数時間での照合 |
@@ -176,6 +178,12 @@ MCP クライアント                         MCP サーバ（webapp-mcp）    
 | `room_update_timer` | 定期実行の更新（全項目の置き換え） | REQ-016 |
 | `room_set_timer_enabled` | 定期実行の有効／無効の切り替え | REQ-016 |
 | `room_delete_timer` | 定期実行の削除 | REQ-016 |
+| `contract_list_contracts` | 契約管理の契約の一覧（キーワード・区分・ステータス・契約の有無・パスワード未設定で絞り込み） | REQ-017 |
+| `contract_get_contract` | 契約 1 件の詳細（依存契約・支払方法・逆引きを含む） | REQ-017 |
+| `contract_list_categories` | 契約の区分の一覧（金融機関の区分かどうかを含む） | REQ-017 |
+| `contract_get_cancellation_plan` | 解約順（解約の対象とその順序、解約方法、警告） | REQ-017 |
+| `contract_create_contract` | 契約の登録（パスワードの値は指定できない） | REQ-018 |
+| `contract_update_contract` | 契約の更新（全項目の置き換え。パスワードの値は指定できない） | REQ-018 |
 
 支出記録の登録・更新のツールは、支払日が省略されたとき、先に Web アプリの支払日の算出 API を呼び、その結果を支払日として登録・更新の API を呼ぶ（1 つのツールで 2 つの API を順に呼ぶ）。算出に失敗したときは登録・更新しない。
 
@@ -186,6 +194,17 @@ ROOM のツールの考え方:
 - 機器の操作（`room_set_device_state`、`room_run_scene`）は、実機が動く。ツールの説明に、そのことと、電灯が未実装であること、一括切替で一部の機器が失敗しうることを書く。
 - 定期実行の定義は、Web アプリの API の項目（`condition`、`weekdays`、`holiday_mode`、`day_shift`、`run_time`、`scene` または `device` + `state`、`is_enabled`）をそのまま、ツールの引数・出力にする。実行内容は、`scene`（一括切替）か、`device` と `state`（機器の個別切替）の、どちらか一方だけを指定させる。入力の組み合わせの検査（どちらも無い、両方、片方だけ、毎日なのに祝日の扱いがある、など）は、Web アプリが行い、本システムは、その拒否の理由を示す（REQ-016）。玄関ドアは、実行内容の選択肢に含めない。
 - 祝日・曜日の判定と、定期実行の自動の実行は、Web アプリの ROOM が行う。本システムは、定義の管理だけを行い、判定の規則（基準日の考え方）を持たない。ツールの説明に、祝日の扱いと実行日の取り方の意味を、AI が読み違えない書き方で示す。
+
+契約管理のツールの考え方:
+
+- 契約管理のツールは、Web アプリの契約管理機能の API キー認証で許可されている操作（契約の一覧・詳細・登録・更新、区分の一覧、解約順の取得）だけを呼ぶ。契約の削除、パスワードの値の取得、アカウント一覧、区分の追加・変更・削除、解約順の保存は、Web アプリが API キーでは拒否するため、ツールを作らない（REQ-018）。
+- **パスワードの値は、入力にも出力にも無い。** 登録・更新のツールに、パスワードの引数を持たせない。Web アプリは、API キーで `password` を含む要求を拒否するので、ツールは `password` を送らない。出力は、Web アプリの応答のまま（値は無く、`has_password` と `password_unset` だけが入る）。
+- 登録した契約は、パスワードが未設定になる。AI が登録したあと、人が Web アプリの画面で、パスワードを入力する。ツールの説明に、そのことと、`password_unset` が `true` の契約が、人の入力待ちであることを書く。
+- 契約は、「契約を伴う」と「契約を伴わない」の別がある。契約を伴わない契約に、契約を伴う契約だけの項目（維持費、更新日、契約日、解約方法、依存契約、支払方法など）を指定すると、Web アプリが拒否する。ツールは検査せず、拒否の理由を示す。ツールの説明に、この区別を書く。
+- 支払方法に選べるのは、金融機関の区分の契約だけ。ツールの説明に書き、`contract_list_categories` の `is_financial` で、金融機関の区分を確かめられるようにする。
+- 契約の更新は、Web アプリの更新 API が、パスワード以外の全項目を受け取り、送らなかった任意の項目を空にする。更新のツールの説明に、先に `contract_get_contract` で現在の値を確かめ、変えない項目も現在の値のまま渡すことを書く（共通の考え方は `tool-design.md`）。更新しても、保存済みのパスワードは変わらない。
+- 契約の入力の組み合わせの検査（契約を伴わないなのに契約の項目がある、維持費の金額と周期の片方だけ、契約日と精度の不整合、2 段階認証の送付先と方式の不一致、依存の循環など）は、Web アプリが行い、本システムは、その拒否の理由を示す。
+- 契約の名称、ユーザ名、登録メールアドレス、2 段階認証の送付先、解約方法などの内容は、ログに出さない（REQ-013）。出すのは、ツール名、サイト、契約の ID、件数、絞り込み条件の種類（キーワードの有無など）、状態コード。
 
 注釈: 取得・一覧・検索のツールは `readOnlyHint=true`。削除のツールは `destructiveHint=true`。登録・更新・切り替え（ROOM の機器の操作・一括切替を含む）は `readOnlyHint=false`、`destructiveHint=false`。
 
@@ -243,11 +262,11 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 | サインイン | クライアント名、成功・失敗（理由: 不一致・ロック中・期限切れ・拒否）、連続失敗回数 |
 | トークンの発行・更新・失効 | クライアント ID、種類 |
 | アクセストークンの検証失敗 | 理由（なし・無効・期限切れ・対象違い） |
-| ツール呼び出し | ツール名、サイト、判断に使う引数（識別子・日付・件数・キーワードの数）、API キーの先頭 12 文字 |
+| ツール呼び出し | ツール名、サイト、判断に使う引数（識別子・日付・件数・キーワードの数）、API キーの先頭 12 文字。契約管理は、契約の ID、絞り込み条件の種類（キーワードの有無など）まで |
 | Web アプリの応答 | ツール名、サイト、メソッド・パス、状態コード、件数、失敗の理由 |
 | 運用コマンド | 実行と結果（件数） |
 
-本文・メモ・タイトル・キーワードの文字列、パスフレーズ、トークン類、API キー全体は出さない。
+本文・メモ・タイトル・キーワードの文字列、契約の名称・ユーザ名・登録メールアドレス・2 段階認証の送付先・解約方法、パスフレーズ、トークン類、API キー全体は出さない。
 
 ## 配置
 
@@ -271,6 +290,7 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 | REQ-008〜REQ-009 | `tools/knowhow.py` |
 | REQ-010〜REQ-011 | `tools/expense.py` |
 | REQ-014〜REQ-016 | `tools/room.py` |
+| REQ-017〜REQ-018 | `tools/contract.py` |
 | REQ-012 | `webapp_client.py` の状態コードの対応付け、再試行しない |
 | REQ-013 | `logger.py`、ログの表 |
 
@@ -294,3 +314,5 @@ SDK の DNS リバインディング対策（`TransportSecuritySettings`）を�
 | 2026-10-01 13:13 | 承認済み | ROOM の追加（ツール 8 個、玄関ドアは参照のみ）を承認 |
 | 2026-10-02 11:12 | 未承認 | REQ-016 の改訂に合わせ、定期実行のツールの説明を更新し、ROOM のツールの考え方に、定期実行の項目（個別切替、祝日の扱い、実行日の取り方）の扱いを追記 |
 | 2026-10-02 11:13 | 承認済み | 定期実行のツールの改訂方針を承認 |
+| 2026-10-03 12:47 | 未承認 | 契約管理の追加（REQ-017、REQ-018）に合わせ、利用する機能に `contract-management` を追加。モジュール `tools/contract.py` と、契約管理のツール 6 個（合計 45 個）を追加。パスワードの値は入出力せず、削除・区分の管理・解約順の保存・アカウント一覧のツールは作らない方針を明記。ログに出さない値を追加 |
+| 2026-10-03 12:49 | 承認済み | 契約管理のツールの追加（6 個、パスワードの値は扱わない）を承認 |
